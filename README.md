@@ -12,9 +12,14 @@ Prism lets business users ask plain-English questions about their data and recei
 # Create the scope (once per workspace)
 databricks secrets create-scope prism-secrets
 
-# Add the three required secrets
-databricks secrets put-secret prism-secrets gitlab-token        --string-value "glpat-..."
-databricks secrets put-secret prism-secrets anthropic-api-key   --string-value "sk-ant-..."
+# GitLab token
+databricks secrets put-secret prism-secrets gitlab-token --string-value "glpat-..."
+
+# LLM provider — add at least one (Anthropic takes priority if both are set)
+databricks secrets put-secret prism-secrets anthropic-api-key  --string-value "sk-ant-..."
+# databricks secrets put-secret prism-secrets openrouter-api-key --string-value "sk-or-..."
+
+# Admin password hash
 databricks secrets put-secret prism-secrets admin-password-hash \
   --string-value "$(python -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt()).decode())")"
 ```
