@@ -30,6 +30,7 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    if: github.repository == 'patelpranav2003/prism'
     permissions:
       contents: read
       packages: write
