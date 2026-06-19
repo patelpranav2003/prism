@@ -44,6 +44,11 @@ jobs:
           cd /tmp/public-repo
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
-          git checkout main
-          git merge dev --no-ff -m "sync: merge dev into main"
+          git fetch origin
+          if git show-ref --quiet refs/remotes/origin/main; then
+            git checkout main
+            git merge origin/dev --no-ff -m "sync: merge dev into main"
+          else
+            git checkout -b main origin/dev
+          fi
           git push origin main
