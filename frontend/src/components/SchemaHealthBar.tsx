@@ -1,4 +1,4 @@
-import type { CacheStatus, StatusResponse } from '../types'
+import type { StatusResponse } from '../types'
 
 interface Props {
   status: StatusResponse | null
