@@ -53,7 +53,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             # Tag :latest on every push to main
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             # Tag with version number on releases (e.g. v1.2.0)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
