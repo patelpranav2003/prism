@@ -303,9 +303,15 @@ class QueryRunner:
         if server_hostname:
             connection_kwargs["server_hostname"] = server_hostname
 
+        # Local dev: use PAT from DATABRICKS_TOKEN if set.
+        # Production (Databricks Apps): token is absent, workspace OAuth handles auth.
+        import os as _os
+        _token = _os.environ.get("DATABRICKS_TOKEN", "")
+        _creds = (lambda: {"Authorization": f"Bearer {_token}"}) if _token else (lambda: {})
+
         try:
             with dbsql.connect(
-                credentials_provider=lambda: {},  # workspace OAuth via env
+                credentials_provider=_creds,
                 **connection_kwargs,
             ) as conn:
                 with conn.cursor() as cursor:
