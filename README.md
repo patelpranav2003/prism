@@ -55,7 +55,7 @@ The app URL is shown in the Databricks Apps UI once deployment completes.
 | Tool | Version | Download |
 |---|---|---|
 | Python | 3.11+ | [python.org](https://www.python.org/downloads/) |
-| Node.js | 20+ | [nodejs.org](https://nodejs.org/) |
+| Node.js | 24+ | [nodejs.org](https://nodejs.org/) |
 | Docker | any | [docker.com](https://www.docker.com/products/docker-desktop/) — Option B only |
 
 ### Option A — Python

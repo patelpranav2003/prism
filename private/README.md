@@ -52,7 +52,9 @@ Go to github.com → New repository → name it `prism` → Public → **do not 
 
 GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens:
 - Repository access: only `prism` (public repo)
-- Permissions: **Contents → Read and write**
+- Permissions:
+  - **Contents → Read and write**
+  - **Workflows → Read and write** ← required so the sync can push workflow files
 
 Copy the token — you only see it once.
 
@@ -180,10 +182,24 @@ cp .env.example .env
 
 ## Local Development
 
+### Prerequisites
+
+- Python 3.11+
+- Node.js 24+ — [nodejs.org](https://nodejs.org/)
+- Docker (Option B only)
+
 ### Python (native)
 
 ```bash
+# Create and activate virtual environment
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS/Linux
+
 pip install -r requirements.txt
+
+cp .env.example .env   # fill in real values
+
 uvicorn backend.main:app --reload --port 8000
 
 # Frontend in a separate terminal
