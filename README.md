@@ -50,10 +50,23 @@ The app URL is shown in the Databricks Apps UI once deployment completes.
 
 ## Local Development
 
+### Prerequisites
+
+| Tool | Version | Download |
+|---|---|---|
+| Python | 3.11+ | [python.org](https://www.python.org/downloads/) |
+| Node.js | 20+ | [nodejs.org](https://nodejs.org/) |
+| Docker | any | [docker.com](https://www.docker.com/products/docker-desktop/) — Option B only |
+
 ### Option A — Python
 
 ```bash
-# Install dependencies
+# Create and activate a virtual environment
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS/Linux
+
+# Install Python dependencies
 pip install -r requirements.txt
 
 # Copy the env template and fill in real values
