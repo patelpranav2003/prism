@@ -19,6 +19,7 @@ jobs:
         with:
           ref: main
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Strip private files
         run: |
