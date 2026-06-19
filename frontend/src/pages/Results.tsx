@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import type { QueryResponse, SchemaModelSummary, StatusResponse } from '../types'
 import { fetchSchema, fetchStatus, submitQuery } from '../api'
 import ExplanationPanel from '../components/ExplanationPanel'
@@ -9,11 +9,10 @@ import SearchBar from '../components/SearchBar'
 
 export default function Results() {
   const location = useLocation()
-  const navigate = useNavigate()
   const state = location.state as { result: QueryResponse; question: string } | null
 
   const [result, setResult] = useState<QueryResponse | null>(state?.result ?? null)
-  const [question, setQuestion] = useState(state?.question ?? '')
+  const [, setQuestion] = useState(state?.question ?? '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<StatusResponse | null>(null)
