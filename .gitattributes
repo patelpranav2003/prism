@@ -1,0 +1,9 @@
+# Normalize all text files to LF in the repo (Linux runtime — Databricks, Docker)
+* text=auto eol=lf
+
+# Force binary files to never be converted
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
+*.woff binary

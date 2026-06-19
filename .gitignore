@@ -1,0 +1,46 @@
+# =============================================================================
+# Prism — .gitignore
+# =============================================================================
+
+# --- Secrets (NEVER commit these) ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# --- Node / Frontend ---
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Databricks ---
+.databricks/
+
+# --- Docker ---
+.docker/

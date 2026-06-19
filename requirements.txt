@@ -1,0 +1,30 @@
+# requirements.txt — pinned Python dependencies for Prism
+# Install with: pip install -r requirements.txt
+
+# Web framework & server
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# Async HTTP client (artifact fetching)
+httpx==0.28.1
+
+# LLM (Claude API)
+anthropic==0.40.0
+
+# SQL execution against Databricks
+databricks-sql-connector==3.4.0
+
+# Semantic embeddings
+sentence-transformers==3.3.1
+numpy==1.26.4
+
+# Password hashing
+bcrypt==4.2.1
+
+# Local development — loads .env file when present; silently ignored in production
+python-dotenv==1.0.1
+
+# Testing
+hypothesis==6.122.3
+pytest==8.3.4
+pytest-asyncio==0.24.0

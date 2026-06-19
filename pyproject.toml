@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+# ---------------------------------------------------------------------------
+# Pytest configuration
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Show short tracebacks for property-based test failures
+addopts = "--tb=short"
+
+# ---------------------------------------------------------------------------
+# Hypothesis profiles
+# ---------------------------------------------------------------------------
+# The "prism" profile is activated by passing --hypothesis-profile=prism.
+# It runs 100 examples per test and suppresses the too_slow health check so
+# that tests involving sentence-transformer inference don't time out.
+#
+# Profile registration happens in tests/conftest.py (see below); this section
+# documents the intent for readers.
+#
+# To use: pytest --hypothesis-profile=prism tests/unit/
+# ---------------------------------------------------------------------------

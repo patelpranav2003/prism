@@ -1,0 +1,45 @@
+# =============================================================================
+# Prism — Databricks Apps deployment manifest
+#
+# Setup for any company:
+#
+# 1. Create a Databricks secret scope named exactly "prism-secrets":
+#      databricks secrets create-scope prism-secrets
+#
+# 2. Add your secrets to the scope:
+#      databricks secrets put-secret prism-secrets gitlab-token --string-value "glpat-xxx"
+#      databricks secrets put-secret prism-secrets anthropic-api-key --string-value "sk-ant-xxx"
+#      databricks secrets put-secret prism-secrets admin-password-hash --string-value "$2b$12$xxx"
+#
+# 3. In the Databricks App UI, set these environment variables:
+#      GITLAB_BASE_URL          https://gitlab.yourcompany.com/api/v4
+#      GITLAB_PROJECT_ID        your-dbt-project-id
+#      DATABRICKS_SQL_WAREHOUSE your-warehouse-id
+#      ADMIN_ALLOWED_EMAILS     you@yourcompany.com,other@yourcompany.com
+#
+# 4. Deploy:
+#      databricks apps deploy prism --source-code-path .
+#    Or point the Databricks App UI at your GitHub repo URL.
+# =============================================================================
+
+command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+env:
+  # --- Secrets (injected from secret scope — never set these as plain env vars) ---
+  - name: GITLAB_TOKEN
+    valueFrom:
+      secretRef:
+        scope: prism-secrets
+        key: gitlab-token
+
+  - name: ANTHROPIC_API_KEY
+    valueFrom:
+      secretRef:
+        scope: prism-secrets
+        key: anthropic-api-key
+
+  - name: ADMIN_PASSWORD_HASH
+    valueFrom:
+      secretRef:
+        scope: prism-secrets
+        key: admin-password-hash
