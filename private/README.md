@@ -152,11 +152,12 @@ gh run list --workflow=sync-public.yml
 
 ### Secrets (Databricks secret scope `prism-secrets`)
 
-| Secret key | Description |
-|---|---|
-| `gitlab-token` | GitLab PAT with `read_api` scope |
-| `anthropic-api-key` | Anthropic API key (`sk-ant-...`) |
-| `admin-password-hash` | bcrypt hash of the Settings page password |
+| Secret key | Description | Required |
+|---|---|---|
+| `gitlab-token` | GitLab PAT with `read_api` scope | Yes |
+| `anthropic-api-key` | Anthropic API key (`sk-ant-...`) | One of these two |
+| `openrouter-api-key` | OpenRouter API key (`sk-or-...`) — fallback if no Anthropic key | One of these two |
+| `admin-password-hash` | bcrypt hash of the Settings page password | Yes |
 
 ### Non-secret variables (set in Databricks App UI)
 
@@ -169,6 +170,8 @@ gh run list --workflow=sync-public.yml
 | `DEFAULT_ROW_LIMIT` | `1000` | No |
 | `REFRESH_INTERVAL_HOURS` | `6` | No |
 | `RETRY_INTERVAL_MINUTES` | `5` | No |
+
+> **LLM provider:** Set at least one of `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` (via secret scope). Anthropic takes priority if both are set. OpenRouter uses `anthropic/claude-sonnet-4-6` by default.
 
 ### Local `.env` file
 

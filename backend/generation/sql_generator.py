@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CLAUDE_MODEL = "claude-sonnet-4-6"
+_OPENROUTER_MODEL = "anthropic/claude-sonnet-4-6"  # same model via OpenRouter
 _MAX_TOKENS = 2000
 _TIMEOUT_SECONDS = 30.0
 
@@ -121,44 +122,33 @@ class SQLGenerator:
             A valid :class:`~backend.models.SQLResult` on success, or a
             :class:`~backend.exceptions.GenerationError` on any failure.
         """
-        import anthropic  # lazy import — not installed in test environments w/o API key
+        provider = "anthropic" if self._config.anthropic_api_key else "openrouter"
 
         logger.info(
             "SQLGenerator: generating SQL for question[:500]=%r; "
-            "selected models=%r; claude_model=%s",
+            "selected models=%r; provider=%s",
             question[:500],
             model_names or [],
-            _CLAUDE_MODEL,
+            provider,
         )
 
         try:
-            client = anthropic.AsyncAnthropic(
-                api_key=self._config.anthropic_api_key,
-                timeout=_TIMEOUT_SECONDS,
-            )
-
-            message = await client.messages.create(
-                model=_CLAUDE_MODEL,
-                max_tokens=_MAX_TOKENS,
-                system=system_prompt,
-                messages=[{"role": "user", "content": question}],
-            )
-
-            # Extract text content
-            raw_text = ""
-            for block in message.content:
-                if hasattr(block, "text"):
-                    raw_text += block.text
+            if provider == "anthropic":
+                raw_text, in_tok, out_tok = await self._call_anthropic(system_prompt, question)
+            else:
+                raw_text, in_tok, out_tok = await self._call_openrouter(system_prompt, question)
 
             logger.info(
-                "SQLGenerator: Claude responded — input_tokens=%d, output_tokens=%d",
-                message.usage.input_tokens,
-                message.usage.output_tokens,
+                "SQLGenerator: %s responded — input_tokens=%d, output_tokens=%d",
+                provider,
+                in_tok,
+                out_tok,
             )
 
         except Exception as exc:
             logger.error(
-                "SQLGenerator: Claude API call failed — %s: %s",
+                "SQLGenerator: LLM API call failed (%s) — %s: %s",
+                provider,
                 type(exc).__name__,
                 str(exc)[:500],
             )
@@ -206,6 +196,49 @@ class SQLGenerator:
             result.models_used,
         )
         return result
+
+    # ------------------------------------------------------------------
+    # Provider helpers
+    # ------------------------------------------------------------------
+
+    async def _call_anthropic(
+        self, system_prompt: str, question: str
+    ) -> tuple[str, int, int]:
+        import anthropic  # lazy import
+        client = anthropic.AsyncAnthropic(
+            api_key=self._config.anthropic_api_key,
+            timeout=_TIMEOUT_SECONDS,
+        )
+        message = await client.messages.create(
+            model=_CLAUDE_MODEL,
+            max_tokens=_MAX_TOKENS,
+            system=system_prompt,
+            messages=[{"role": "user", "content": question}],
+        )
+        raw_text = "".join(
+            block.text for block in message.content if hasattr(block, "text")
+        )
+        return raw_text, message.usage.input_tokens, message.usage.output_tokens
+
+    async def _call_openrouter(
+        self, system_prompt: str, question: str
+    ) -> tuple[str, int, int]:
+        from openai import AsyncOpenAI  # lazy import
+        client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=self._config.openrouter_api_key,
+            timeout=_TIMEOUT_SECONDS,
+        )
+        completion = await client.chat.completions.create(
+            model=_OPENROUTER_MODEL,
+            max_tokens=_MAX_TOKENS,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": question},
+            ],
+        )
+        raw_text = completion.choices[0].message.content or ""
+        return raw_text, completion.usage.prompt_tokens, completion.usage.completion_tokens
 
     # ------------------------------------------------------------------
     # Validation helpers

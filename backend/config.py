@@ -31,8 +31,11 @@ class AppConfig:
     gitlab_project_id: str
     gitlab_token: str            # from Databricks secret scope
     databricks_sql_warehouse: str
-    anthropic_api_key: str       # from Databricks secret scope
     admin_password_hash: str     # bcrypt hash of the admin password
+
+    # LLM provider — at least one must be set. Anthropic takes priority.
+    anthropic_api_key: str = ""  # from Databricks secret scope (ANTHROPIC_API_KEY)
+    openrouter_api_key: str = "" # fallback: use OpenRouter if no Anthropic key (OPENROUTER_API_KEY)
 
     # Optional: Databricks server hostname. When empty the connector infers it
     # from the DATABRICKS_HOST environment variable (set automatically in Apps).
@@ -52,13 +55,20 @@ class AppConfig:
         Raises ``KeyError`` if any required variable is absent.
         """
         load_dotenv()  # no-op if .env doesn't exist
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+        if not anthropic_key and not openrouter_key:
+            raise KeyError(
+                "At least one of ANTHROPIC_API_KEY or OPENROUTER_API_KEY must be set"
+            )
         return cls(
             gitlab_base_url=os.environ["GITLAB_BASE_URL"],
             gitlab_project_id=os.environ["GITLAB_PROJECT_ID"],
             gitlab_token=os.environ["GITLAB_TOKEN"],
             databricks_sql_warehouse=os.environ["DATABRICKS_SQL_WAREHOUSE"],
-            anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
             admin_password_hash=os.environ["ADMIN_PASSWORD_HASH"],
+            anthropic_api_key=anthropic_key,
+            openrouter_api_key=openrouter_key,
             databricks_server_hostname=os.environ.get("DATABRICKS_SERVER_HOSTNAME", ""),
             default_row_limit=int(os.environ.get("DEFAULT_ROW_LIMIT", "1000")),
             refresh_interval_hours=int(os.environ.get("REFRESH_INTERVAL_HOURS", "6")),
@@ -81,7 +91,7 @@ def mask_secret(value: str, secret_type: str) -> str:
     - Any other secret_type: return value unchanged (caller should not pass
       unknown sensitive types here).
     """
-    if secret_type in ("GITLAB_TOKEN", "ANTHROPIC_API_KEY"):
+    if secret_type in ("GITLAB_TOKEN", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"):
         if len(value) <= 4:
             return "*" * len(value)
         return "*" * (len(value) - 4) + value[-4:]
