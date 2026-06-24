@@ -1,4 +1,5 @@
 # requirements.txt — pinned Python dependencies for Prism
+# Requires Python 3.11+ (uses X | Y union syntax not available in 3.9/3.10)
 # Install with: pip install -r requirements.txt
 
 # Web framework & server
