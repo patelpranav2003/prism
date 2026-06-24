@@ -57,17 +57,44 @@ _VALID_CONFIDENCE = {"high", "medium", "low"}
 # Backtick-quoted identifier or plain word: used for simple column extraction
 _COLUMN_REF_RE = re.compile(r"`([^`]+)`|\b([a-zA-Z_][a-zA-Z0-9_]*)\b")
 
-# SQL keywords to ignore when extracting column references
+# SQL keywords and built-in functions to ignore when extracting column references
 _SQL_KEYWORDS = frozenset({
+    # DML / DDL / clause keywords
     "select", "from", "where", "join", "left", "right", "inner", "outer",
     "on", "and", "or", "not", "in", "is", "null", "as", "group", "by",
     "order", "having", "limit", "offset", "distinct", "case", "when",
     "then", "else", "end", "with", "union", "all", "except", "intersect",
     "create", "insert", "update", "delete", "drop", "alter", "truncate",
-    "qualify", "over", "partition", "rows", "range", "between", "row_number",
-    "rank", "dense_rank", "date_trunc", "dateadd", "datediff", "true",
-    "false", "asc", "desc", "nulls", "first", "last", "using",
+    "qualify", "over", "partition", "rows", "range", "between", "using",
+    "asc", "desc", "nulls", "first", "last", "cross", "full",
+    "true", "false",
+    # Comparison / pattern operators
+    "like", "ilike", "rlike", "similar", "to",
+    # Window / aggregate functions
+    "row_number", "rank", "dense_rank", "ntile", "lag", "lead",
+    "first_value", "last_value", "count", "sum", "avg", "min", "max",
+    "coalesce", "nullif", "ifnull", "nvl",
+    # String functions
+    "lower", "upper", "trim", "ltrim", "rtrim", "concat", "substring",
+    "substr", "length", "len", "replace", "split", "regexp_replace",
+    "regexp_extract", "initcap", "lpad", "rpad",
+    # Date / time functions
+    "date_trunc", "dateadd", "datediff", "date_add", "date_sub",
+    "date_diff", "current_date", "current_timestamp", "now", "year",
+    "month", "day", "hour", "minute", "second", "to_date", "to_timestamp",
+    "date_format", "unix_timestamp", "from_unixtime", "add_months",
+    # Type casting / conversion
+    "cast", "try_cast", "convert", "int", "bigint", "varchar", "string",
+    "double", "float", "boolean", "timestamp", "date",
+    # Misc functions
+    "if", "iff", "decode", "greatest", "least", "abs", "round", "floor",
+    "ceil", "ceiling", "mod", "sign", "power", "sqrt", "log", "exp",
+    "array_agg", "collect_list", "collect_set", "flatten", "explode",
+    "size", "array_size", "struct", "map", "named_struct",
 })
+
+# Regex to strip string literals before token extraction
+_STRING_LITERAL_RE = re.compile(r"'[^']*'")
 
 
 class SQLGenerator:
@@ -275,27 +302,52 @@ class SQLGenerator:
         if not self._index.models:
             return result
 
-        # Build a set of all known column names (case-insensitive)
+        # Build lookup sets for everything that is NOT a column reference
         known_columns: set[str] = set()
+        known_catalogs: set[str] = set()
+        known_schemas: set[str] = set()
+        known_table_names: set[str] = set()
+
         for model in self._index.models:
             for col in model.columns:
                 known_columns.add(col.name.lower())
+            if model.database:
+                known_catalogs.add(model.database.lower())
+            if model.schema_name:
+                known_schemas.add(model.schema_name.lower())
+            if model.fqn:
+                known_table_names.add(model.fqn.rsplit(".", 1)[-1].lower())
+            known_table_names.add(model.name.lower())
+
+        # Extract all defined aliases so they are not flagged as unknown columns:
+        # - CTE names:       WITH deduped AS (  →  word BEFORE "AS ("
+        # - Column aliases:  SUM(...) AS total  →  word AFTER "AS"
+        # - Table aliases:   FROM tbl AS t      →  word AFTER "AS"
+        defined_aliases: set[str] = set()
+        for m in re.findall(r'\b(\w+)\s+AS\s*\(', result.sql, re.IGNORECASE):
+            defined_aliases.add(m.lower())
+        for m in re.findall(r'\bAS\s+(\w+)', result.sql, re.IGNORECASE):
+            defined_aliases.add(m.lower())
+
+        # Strip string literals before scanning for column tokens so that
+        # values inside LIKE '%foo%' are not mistaken for column names
+        sql_for_scan = _STRING_LITERAL_RE.sub("''", result.sql)
 
         # Extract column-like tokens from the generated SQL
-        sql_lower = result.sql.lower()
         unrecognised: list[str] = []
-        for match in _COLUMN_REF_RE.finditer(result.sql):
+        for match in _COLUMN_REF_RE.finditer(sql_for_scan):
             token = (match.group(1) or match.group(2) or "").lower()
             if not token or token in _SQL_KEYWORDS:
                 continue
-            # Skip numeric-only tokens and tokens that look like table references
             if token.isdigit():
                 continue
-            # Only flag tokens that look like column names (no dots/slashes)
+            # Skip tokens with dots/slashes — these are FQN parts, not columns
             if "." in token or "/" in token:
                 continue
-            # Skip tokens that match a known model name (table reference)
-            if any(token == m.name.lower() for m in self._index.models):
+            # Skip catalog, schema, table name, and CTE alias references
+            if token in known_catalogs or token in known_schemas or token in known_table_names:
+                continue
+            if token in defined_aliases:
                 continue
             if token not in known_columns:
                 unrecognised.append(match.group(1) or match.group(2) or "")

@@ -30,6 +30,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.api.routes import router
@@ -69,7 +70,7 @@ async def lifespan(app: FastAPI):
     # --- Discovery pipeline ---
     fetcher = ArtifactFetcher(config)
     index_builder = IndexBuilder()
-    cache = CacheManager(config, fetcher, index_builder)
+    cache = CacheManager(config, fetcher, index_builder, embedder)
 
     # --- Initial refresh (synchronous first call) ---
     logger.info("Prism: performing initial schema refresh")
@@ -148,7 +149,20 @@ def create_app() -> FastAPI:
     # --- Static React SPA ---
     _dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
     if os.path.isdir(_dist):
-        app.mount("/", StaticFiles(directory=_dist, html=True), name="static")
+        # Serve compiled assets (JS/CSS/images) under /assets
+        _assets = os.path.join(_dist, "assets")
+        if os.path.isdir(_assets):
+            app.mount("/assets", StaticFiles(directory=_assets), name="static-assets")
+
+        # Catch-all: serve index.html for all non-API paths so React Router works.
+        # API routes registered above take priority; this only fires for unmatched paths.
+        @app.get("/{full_path:path}")
+        async def spa_fallback(full_path: str) -> FileResponse:
+            # Serve exact files (favicon.ico, robots.txt, etc.) when they exist
+            candidate = os.path.join(_dist, full_path)
+            if full_path and os.path.isfile(candidate):
+                return FileResponse(candidate)
+            return FileResponse(os.path.join(_dist, "index.html"))
     else:
         logger.warning(
             "Prism: frontend/dist not found — static file serving disabled. "

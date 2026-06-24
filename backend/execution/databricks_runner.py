@@ -285,6 +285,7 @@ class QueryRunner:
 
     def _run_query_sync(self, sql: str, row_limit: int) -> list[ResultRow]:
         """Synchronous Databricks SQL execution — runs in a thread pool."""
+        import os as _os
         from databricks import sql as dbsql  # type: ignore[import]
 
         warehouse_id = self._config.databricks_sql_warehouse
@@ -295,25 +296,37 @@ class QueryRunner:
             "***MASKED***",  # Never log the warehouse ID plainly
         )
 
+        # Fall back to DATABRICKS_HOST when no explicit hostname is configured.
+        # databricks-sql-connector requires server_hostname — it does not infer it.
+        if not server_hostname:
+            host = _os.environ.get("DATABRICKS_HOST", "")
+            if host:
+                server_hostname = host.removeprefix("https://").removeprefix("http://").rstrip("/")
+
+        if not server_hostname:
+            raise RuntimeError(
+                "Databricks server hostname is not configured. "
+                "Set DATABRICKS_SERVER_HOSTNAME or DATABRICKS_HOST in your .env file."
+            )
+
+        # Accept either a full path (/sql/1.0/warehouses/<id>) or just the ID
+        http_path = warehouse_id if warehouse_id.startswith("/") else f"/sql/1.0/warehouses/{warehouse_id}"
+
         connection_kwargs: dict[str, object] = {
-            "http_path": f"/sql/1.0/warehouses/{warehouse_id}",
+            "server_hostname": server_hostname,
+            "http_path": http_path,
         }
 
-        # Use server hostname if available; otherwise let connector infer from env
-        if server_hostname:
-            connection_kwargs["server_hostname"] = server_hostname
-
         # Local dev: use PAT from DATABRICKS_TOKEN if set.
-        # Production (Databricks Apps): token is absent, workspace OAuth handles auth.
-        import os as _os
+        # credentials_provider must return a HeaderFactory (a callable returning headers),
+        # not the headers dict directly.
+        # Production (Databricks Apps): omit credentials_provider; workspace OAuth handles auth.
         _token = _os.environ.get("DATABRICKS_TOKEN", "")
-        _creds = (lambda: {"Authorization": f"Bearer {_token}"}) if _token else (lambda: {})
+        if _token:
+            connection_kwargs["credentials_provider"] = lambda: (lambda: {"Authorization": f"Bearer {_token}"})
 
         try:
-            with dbsql.connect(
-                credentials_provider=_creds,
-                **connection_kwargs,
-            ) as conn:
+            with dbsql.connect(**connection_kwargs) as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(sql)
                     columns = [desc[0] for desc in (cursor.description or [])]

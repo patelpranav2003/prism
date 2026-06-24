@@ -52,6 +52,7 @@ _DIALECT_RULES = """
 - Always include a LIMIT clause; default LIMIT is 1000 when not specified
 - Never write SELECT * — always list specific column names
 - Databricks SQL does not support FULL OUTER JOIN ON TRUE; use CROSS JOIN instead
+- IMPORTANT: When filtering by brand, product, or other named entity: (1) If a dimension/lookup table is available (e.g. portfolio, brand, dim_brands), always JOIN the fact table to it on the shared ID key (e.g. portfolio_id, brand_id) and filter on the dimension table's name column — this is the authoritative source and avoids NULL gaps in denormalized columns. (2) Only filter directly on a denormalized name column (e.g. `brand` on a fact table) when no dimension table is available. (3) Always use case-insensitive partial match: `LOWER(column) LIKE '%keyword%'` — never exact equality since stored values may include extra words (e.g. 'MONDAY Haircare' not 'monday').
 """.strip()
 
 
@@ -120,9 +121,17 @@ class PromptBuilder:
             "Respond with ONLY a JSON object containing these five fields:\n"
             '  "sql": "<valid SQL>",\n'
             '  "explanation": "<plain-English explanation>",\n'
-            '  "models_used": ["<model1>", "<model2>"],\n'
+            '  "models_used": ["<fqn1>", "<fqn2>"],\n'
             '  "confidence": "high" | "medium" | "low",\n'
             '  "confidence_reason": "<brief reason>"\n\n'
+            "Guidance on model selection:\n"
+            "- If multiple models exist at different grains (e.g. ad-level, campaign-level, "
+            "product-level) that could answer the question, choose the grain that best "
+            "matches the question intent. State clearly in your explanation WHICH table "
+            "you chose, at WHAT grain, and WHY. If the choice is ambiguous, note the "
+            "alternative table(s) and how they would give different results.\n"
+            "- Set confidence='medium' when you had to choose between multiple models at "
+            "different grains and the question did not specify which level was intended.\n\n"
             "Do NOT wrap the JSON in markdown code fences or add any text outside it."
         )
 
@@ -198,23 +207,40 @@ class PromptBuilder:
         return "\n".join(lines)
 
     def _lineage_block(self, models: list[RankedModel]) -> str:
-        """Return a lineage relationships section, or empty string if none."""
+        """Return a lineage relationships section, or empty string if none.
+
+        Prefers graph-based lineage from graph_summary.json; falls back to
+        the manifest's depends_on list when the graph is unavailable.
+        """
         lines: list[str] = ["## Model Lineage"]
         has_content = False
 
         for ranked in models:
-            name = ranked.model.name
+            model = ranked.model
+            name = model.name
             node = self._index.lineage.get(name)
-            if node is None:
-                continue
 
-            if node.parents or node.children:
+            parents: list[str] = []
+            children: list[str] = []
+
+            if node is not None:
+                parents = node.parents
+                children = node.children
+            elif model.depends_on:
+                # Fall back to manifest depends_on when graph lineage is absent.
+                # Strip the "model.<project>." prefix to get bare model names.
+                parents = [
+                    p.rsplit(".", 1)[-1] if "." in p else p
+                    for p in model.depends_on
+                ]
+
+            if parents or children:
                 has_content = True
                 lines.append(f"\n**{name}**")
-                if node.parents:
-                    lines.append(f"  - Depends on: {', '.join(node.parents)}")
-                if node.children:
-                    lines.append(f"  - Used by: {', '.join(node.children)}")
+                if parents:
+                    lines.append(f"  - Depends on (join candidates): {', '.join(parents)}")
+                if children:
+                    lines.append(f"  - Used by: {', '.join(children)}")
 
         if not has_content:
             return ""
@@ -228,9 +254,12 @@ class PromptBuilder:
             "## Deduplication Warning\n\n"
             f"The following model(s) have an **unknown grain**: {model_names}.\n\n"
             "This means the table may contain duplicate rows for the same entity. "
-            "You MUST add deduplication logic in your query using one of:\n"
-            "- `SELECT DISTINCT ...` if all columns define uniqueness\n"
-            "- `ROW_NUMBER() OVER (PARTITION BY <key> ORDER BY <tiebreak>) = 1` "
-            "  to keep only one row per entity\n\n"
-            "Failure to deduplicate may produce inflated or incorrect results."
+            "Apply deduplication ONLY when fetching row-level data (non-aggregate SELECT):\n"
+            "- `SELECT DISTINCT ...` if all selected columns define uniqueness\n"
+            "- `ROW_NUMBER() OVER (PARTITION BY <exact_key> ORDER BY <tiebreak>) = 1` "
+            "  to keep one row per entity — only when you are certain of the exact key\n\n"
+            "CRITICAL: For aggregate queries (SUM, COUNT, AVG, etc.) do NOT add "
+            "ROW_NUMBER() deduplication. Partitioning incorrectly WILL silently remove "
+            "legitimate rows and produce wrong totals. Instead, write the aggregate "
+            "directly: `SELECT SUM(col) FROM table WHERE ...`"
         )
