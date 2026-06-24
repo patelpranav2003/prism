@@ -85,6 +85,8 @@ cd frontend && npm install && npm run dev
 # Vite proxies /api/* to http://localhost:8000
 ```
 
+**Local dev authentication:** Set `DATABRICKS_TOKEN` in `.env` to a Databricks Personal Access Token (starts with `dapi...`). Production deployments use workspace OAuth automatically and do not need this variable.
+
 ### Option B — Docker
 
 ```bash

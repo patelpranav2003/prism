@@ -303,6 +303,46 @@ Implement Prism as a Databricks App with a Python/FastAPI backend and a React/Ty
   - Add `frontend/package-lock.json` to repo for reproducible Docker builds (`npm ci`)
   - _Requirements: 6.2, 16.4_
 
+- [x] 26. Bug fixes and reliability improvements (post-local-testing)
+  - [x] 26.1 Fix embeddings never computed — retrieval returned empty results
+    - Pass `Embedder` instance as 4th argument to `CacheManager.__init__`
+    - `CacheManager.refresh()` calls `embedder.embed_models(new_index.models)` and sets `new_index.embeddings` before `swap_index()`
+    - Root cause: `IndexBuilder` left `SchemaIndex.embeddings` as an empty `(0,)` shape array; cosine similarity produced no ranked models
+    - _Requirements: 4.1, 4.2_
+  - [x] 26.2 Fix FQN to use dbt alias (actual Databricks table name)
+    - `ManifestParser` now reads `node.get("alias")` for the materialized table name
+    - FQN constructed as `database.schema.alias`; falls back to `database.schema.name` when alias is absent or empty
+    - Without this fix: queries failed with `TABLE_OR_VIEW_NOT_FOUND` for any model where the dbt alias differs from the model name
+    - _Requirements: 3.2_
+  - [x] 26.3 Fix Databricks connector hostname and credential resolution
+    - Auto-extract hostname from `DATABRICKS_HOST` env var (strip `https://` prefix) when `DATABRICKS_SERVER_HOSTNAME` is empty
+    - Fix `credentials_provider`: must return a HeaderFactory (callable returning a dict), not a dict directly — implemented as double-lambda pattern
+    - Accept full `/sql/1.0/warehouses/{id}` path OR bare warehouse ID in `DATABRICKS_SQL_WAREHOUSE`
+    - Raise `RuntimeError` at connection time if no hostname can be determined
+    - _Requirements: 6.1, 6.2_
+  - [x] 26.4 Fix React Router SPA routing (Settings page returning 404)
+    - Replaced `StaticFiles(html=True)` mount with explicit `/assets` static mount for compiled JS/CSS
+    - Added `/{full_path:path}` catch-all route that returns `index.html` for all non-API, non-asset paths
+    - Without this fix: direct navigation to `/settings`, `/results`, etc. returned HTTP 404
+    - _Requirements: 14.1_
+  - [x] 26.5 Fix column validator false positives (confidence always forced to low)
+    - Expanded `_SQL_KEYWORDS` from ~20 to 70+ entries covering SQL aggregate functions, string functions, date functions, type names, and operators
+    - Strip string literals via `_STRING_LITERAL_RE` before token scanning — prevents LIKE `'%value%'` content from being flagged as unknown columns
+    - Build skip-sets for known catalog names, schema names, and table names from SchemaIndex
+    - Dual-pattern alias extraction: both `word AS (` (CTE names) and `AS word` (column/table aliases) added to skip set
+    - _Requirements: 15.4, 15.5_
+  - [x] 26.6 Improve prompt: grain selection guidance, JOIN rules, dedup safety
+    - Preamble: instruct Claude to state which table and grain was chosen and why; set `confidence='medium'` when multiple models at different grains are equally plausible
+    - Dialect rules: always JOIN dimension/lookup tables on shared key columns; use `LOWER(column) LIKE '%keyword%'`, never exact equality
+    - Dedup instruction: explicitly prohibit ROW_NUMBER() for aggregate queries — incorrect partitioning silently corrupts SUM/COUNT totals
+    - Lineage block: fall back to `model.depends_on` list when graph_summary.json lineage is absent
+    - _Requirements: 5.1, 5.2, 5.3_
+  - [x] 26.7 Improve retrieval: top_n=8 and depends_on parent expansion
+    - Increased default `top_n` from 5 to 8 for a broader candidate set
+    - After retrieval, auto-expand result set with parent dimension/lookup tables from each model's `depends_on` list if not already present
+    - Ensures JOIN candidates are always available in the prompt context
+    - _Requirements: 4.4, 5.1_
+
 - [ ] 27. Email-based admin authentication (future)
   - Replace bcrypt `ADMIN_PASSWORD_HASH` gate in `POST /api/auth` with `X-Forwarded-Email` header validation
   - Add `ADMIN_ALLOWED_EMAILS` env var (comma-separated) to `AppConfig`; set in Databricks App UI

@@ -165,13 +165,22 @@ gh run list --workflow=sync-public.yml
 |---|---|---|
 | `GITLAB_BASE_URL` | `https://gitlab.yourcompany.com/api/v4` | Yes |
 | `GITLAB_PROJECT_ID` | `123` | Yes |
-| `DATABRICKS_SQL_WAREHOUSE` | `abc123def456` | Yes |
-| `DATABRICKS_SERVER_HOSTNAME` | `adb-xxx.azuredatabricks.net` | No (auto-detected) |
+| `DATABRICKS_SQL_WAREHOUSE` | `abc123def456` or `/sql/1.0/warehouses/abc123` | Yes |
+| `DATABRICKS_SERVER_HOSTNAME` | `adb-xxx.azuredatabricks.net` | No (auto-detected from `DATABRICKS_HOST`, which Databricks Apps sets automatically) |
 | `DEFAULT_ROW_LIMIT` | `1000` | No |
 | `REFRESH_INTERVAL_HOURS` | `6` | No |
 | `RETRY_INTERVAL_MINUTES` | `5` | No |
 
 > **LLM provider:** Set at least one of `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` (via secret scope). Anthropic takes priority if both are set. OpenRouter uses `anthropic/claude-sonnet-4-6` by default.
+
+### Local development only (`.env` file)
+
+These variables are only needed for local dev — they are not used or needed in production.
+
+| Variable | Example | Notes |
+|---|---|---|
+| `DATABRICKS_TOKEN` | `dapi...` | Databricks Personal Access Token for local dev auth. In production, workspace OAuth is used automatically. |
+| `DATABRICKS_HOST` | `https://adb-xxx.azuredatabricks.net` | Alternative to `DATABRICKS_SERVER_HOSTNAME` — the runner strips `https://` automatically. Use whichever is more convenient in your `.env`. |
 
 ### Local `.env` file
 

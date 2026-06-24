@@ -37,7 +37,7 @@ sequenceDiagram
     participant QR as Query_Runner (Databricks)
 
     U->>API: POST /api/query {question, row_limit}
-    API->>R: retrieve(question_embedding, top_n=5)
+    API->>R: retrieve(question_embedding, top_n=8)
     R-->>API: [ranked_models]
     API->>PB: build_prompt(ranked_models, question)
     PB-->>API: system_prompt
@@ -60,9 +60,10 @@ sequenceDiagram
     S->>AF: fetch_artifacts() [parallel, 30s timeout each]
     AF-->>CM: store(manifest, catalog, graph) + set "fresh"
     CM->>IB: build_index(artifacts)
-    IB->>E: embed_all_models()
-    E-->>IB: numpy embeddings array
-    IB-->>CM: swap_in(schema_index, embeddings)
+    IB-->>CM: schema_index (embeddings empty)
+    CM->>E: embed_models(index.models)
+    E-->>CM: numpy embeddings array (N, 384)
+    CM->>CM: index.embeddings = array; swap_in(index)
     Note over CM: Background: every 6h → repeat above
 ```
 
@@ -129,7 +130,7 @@ class ManifestParser:
     def parse(self, raw: bytes) -> list[ModelMeta]
 ```
 
-- Extracts: `name`, `database`, `schema`, `fqn`, columns (name + description), `meta.grain`, `compiled_sql[:500]`, `depends_on.nodes`, `tags`, `fqn` path.
+- Extracts: `name`, `database`, `schema`, `alias` (actual materialized table name in Databricks — falls back to `name` when absent), `fqn` (constructed as `database.schema.alias`), columns (name + description), `meta.grain`, `compiled_sql[:500]`, `depends_on.nodes`, `tags`, folder path.
 - Missing/null fields → zero value (empty string / empty list / 0) + WARN log.
 - Top-level JSON parse error → raises `ParseError`; caller (Index_Builder) handles it.
 
@@ -185,6 +186,7 @@ Thread-safe in-memory store for artifacts and the active `SchemaIndex`.
 
 ```python
 class CacheManager:
+    def __init__(self, config: AppConfig, fetcher: ArtifactFetcher, index_builder: IndexBuilder, embedder: Embedder) -> None
     def get_index(self) -> SchemaIndex | None
     def get_status(self) -> CacheStatus   # "fresh" | "stale" | "unavailable"
     def get_meta(self) -> CacheMeta       # last_refresh_utc, model_count
@@ -195,6 +197,7 @@ class CacheManager:
 - Uses `asyncio.Lock` for atomic swap.
 - Background task: `asyncio.create_task` on a 6-hour loop; on failure, retries every 5 minutes indefinitely.
 - While refresh runs, all reads serve the previous (good) index.
+- After IndexBuilder returns a new SchemaIndex, CacheManager calls `embedder.embed_models()` to populate the embeddings array before atomically swapping the index in. This ensures the SchemaIndex always has valid embeddings when it becomes the active index.
 - Exposes status / meta to the `/api/status` endpoint consumed by the frontend.
 
 ### 7. `search/embedder.py` — Embedder
@@ -219,7 +222,7 @@ Computes cosine similarity and applies Gold/Silver score boosts.
 
 ```python
 class Retriever:
-    def retrieve(self, question_vec: np.ndarray, top_n: int = 5) -> list[RankedModel]
+    def retrieve(self, question_vec: np.ndarray, top_n: int = 8) -> list[RankedModel]
 ```
 
 - Cosine similarity: `(embeddings @ question_vec) / (||embeddings|| * ||question_vec||)` via numpy.
@@ -237,10 +240,11 @@ class PromptBuilder:
 ```
 
 System prompt sections (Requirement 5.1, 5.2):
-1. **Schema block** per model: fully qualified name, all columns (≤300) with types and descriptions, grain, layer, compiled SQL excerpt.
-2. **Lineage block**: direct parent/child relationships from the adjacency list.
-3. **Dialect rules**: fully qualified `catalog.schema.table` names; backtick-quoted columns with special chars; `DATE_TRUNC` / `DATEADD` / `DATEDIFF`; `QUALIFY` for window filtering; default `LIMIT 1000`; no `SELECT *`.
-4. **Deduplication instruction**: injected when grain is `"unknown"` or no GROUP BY / DISTINCT / `_by_` pattern (Requirement 5.3).
+1. **Preamble**: Role instruction, JSON response format, and model/grain selection guidance — Claude must state which table and grain was chosen and why; confidence is set to 'medium' when multiple models at different grains are equally plausible.
+2. **Schema block** per model: fully qualified name (using dbt alias), all columns (≤300) with types and descriptions, grain, layer, compiled SQL excerpt.
+3. **Lineage block**: direct parent/child relationships; prefers graph_summary.json adjacency list, falls back to manifest `depends_on` when graph data is absent. Parents shown as "join candidates".
+4. **Dialect rules**: fully qualified `catalog.schema.table` names; backtick-quoted columns with special chars; `DATE_TRUNC` / `DATEADD` / `DATEDIFF`; `QUALIFY` for window filtering; default `LIMIT 1000`; no `SELECT *`; JOIN dimension tables on shared key columns rather than filtering on denormalized name columns in fact tables; always use `LOWER(column) LIKE '%keyword%'`, never exact equality.
+5. **Deduplication instruction**: injected when grain is `"unknown"` or no GROUP BY / DISTINCT / `_by_` pattern (Requirement 5.3). For aggregate queries (SUM, COUNT, AVG, etc.) ROW_NUMBER() deduplication is explicitly prohibited — it silently removes legitimate rows and corrupts totals.
 
 If a model has >300 columns, includes the first 300 and logs a WARNING (Requirement 15.3).
 
@@ -257,7 +261,7 @@ class SQLGenerator:
 - Required JSON fields: `sql`, `explanation`, `models_used`, `confidence`, `confidence_reason`.
 - On non-200, timeout (30s), or invalid JSON: returns `GenerationError` with user-facing message "Unable to generate SQL — please try rephrasing your question."
 - Logs: question[:500], selected model names, Claude model ID, token count, outcome.
-- Post-generation: extracts column references from SQL, cross-checks against Schema_Index; unrecognised columns → WARN log + sets `confidence="low"` (Requirement 15.4, 15.5).
+- Post-generation column validation: extracts column references from SQL (after stripping string literals and SQL keywords/functions from consideration), cross-checks against SchemaIndex; skips tokens matching known catalog names, schema names, table names, or defined CTE/column aliases; unrecognised columns → WARN log + sets `confidence="low"` (Requirement 15.4, 15.5).
 
 ### 11. `execution/databricks_runner.py` — Query_Runner
 
@@ -268,7 +272,8 @@ class QueryRunner:
     async def execute(self, sql: str, row_limit: int = 1000) -> AsyncIterator[ResultRow]
 ```
 
-- Uses `databricks-sql-connector` with workspace OAuth token (`ServerlessComputeClient` / `oauth_type="azure-msp"` or equivalent runtime injection).
+- Authentication: workspace OAuth in Databricks Apps production. In local dev, if `DATABRICKS_TOKEN` env var is set, uses it as a Personal Access Token via `credentials_provider` (double-lambda HeaderFactory pattern). Server hostname: reads `DATABRICKS_SERVER_HOSTNAME` first; falls back to stripping `https://` prefix from `DATABRICKS_HOST` (auto-set by Databricks Apps runtime). HTTP path: accepts either full path (`/sql/1.0/warehouses/abc123`) or bare warehouse ID.
+- Uses `databricks-sql-connector`.
 - Streams rows as they arrive (cursor iteration).
 - Enforces `row_limit` (1–10000); injects `LIMIT {row_limit}` if not already present.
 - DDL/DML guard: checks SQL for prohibited keywords (CREATE, INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, MERGE, REPLACE) before execution; raises `SecurityError` if detected (Requirement 11.5).
@@ -281,7 +286,7 @@ FastAPI router defining all HTTP endpoints.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/query` | Submit a natural language question |
+| `POST` | `/api/query` | Embed question → retrieve top-8 models → expand with `depends_on` parents → build prompt → generate SQL → execute |
 | `GET` | `/api/status` | Cache status, model count, last refresh |
 | `POST` | `/api/refresh` | Admin: trigger manual refresh |
 | `POST` | `/api/auth` | Admin: validate password |

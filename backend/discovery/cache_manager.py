@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from backend.discovery.gitlab_fetcher import ArtifactFetcher
     from backend.discovery.index_builder import IndexBuilder
     from backend.exceptions import FetchError
+    from backend.search.embedder import Embedder
 
 logger = logging.getLogger(__name__)
 
@@ -110,10 +111,12 @@ class CacheManager:
         config: "AppConfig",
         fetcher: "ArtifactFetcher",
         index_builder: "IndexBuilder",
+        embedder: "Embedder",
     ) -> None:
         self._config = config
         self._fetcher = fetcher
         self._index_builder = index_builder
+        self._embedder = embedder
 
         # Initialise to a clean unavailable state.  The lock is created here
         # so it is bound to the correct event loop when the object is
@@ -285,7 +288,10 @@ class CacheManager:
                 self._state.status = "stale"
                 return RefreshResult(success=False, model_count=None, error=error_msg)
 
-            # --- Step 3: Atomic swap (Requirement 2.5) ---
+            # --- Step 3: Generate embeddings ---
+            new_index.embeddings = self._embedder.embed_models(new_index.models)
+
+            # --- Step 4: Atomic swap (Requirement 2.5) ---
             self._state.bundle = bundle
             self.swap_index(new_index)
 

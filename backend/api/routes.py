@@ -134,12 +134,34 @@ async def query(
         raise _error_response("Failed to process your question. Please try again.")
 
     # --- Retrieve relevant models ---
-    ranked_models = retriever.retrieve(question_vec, top_n=5)
+    ranked_models = retriever.retrieve(question_vec, top_n=8)
     if not ranked_models:
         raise _error_response(
             "No relevant models found in the schema for your question.",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
+
+    # --- Expand with depends_on parents (dimension/lookup tables) ---
+    # Build a name→model lookup for fast resolution
+    model_by_name = {m.name: m for m in index.models}
+    existing_names = {rm.model.name for rm in ranked_models}
+    from backend.models import RankedModel
+    for rm in list(ranked_models):
+        for dep in rm.model.depends_on:
+            # depends_on entries are like "model.project.model_name" — take last segment
+            dep_name = dep.rsplit(".", 1)[-1] if "." in dep else dep
+            if dep_name not in existing_names:
+                dep_model = model_by_name.get(dep_name)
+                if dep_model is not None:
+                    ranked_models.append(
+                        RankedModel(
+                            model=dep_model,
+                            raw_similarity=0.0,
+                            adjusted_score=0.0,
+                            confidence_hint=None,
+                        )
+                    )
+                    existing_names.add(dep_name)
 
     model_names = [rm.model.name for rm in ranked_models]
 

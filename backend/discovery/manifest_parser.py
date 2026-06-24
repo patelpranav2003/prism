@@ -109,10 +109,16 @@ class ManifestParser:
         database = self._get_str(node, "database", model_name)
         schema_name = self._get_str(node, "schema", model_name)
 
-        # FQN: construct as database.schema.name (not the list from manifest).
+        # dbt alias = the actual table name materialized in the warehouse.
+        # When absent or empty, the model name is used as the table name.
+        alias_raw = node.get("alias")
+        table_name = alias_raw if isinstance(alias_raw, str) and alias_raw else name
+
+        # FQN: database.schema.table_name (uses alias so the SQL references the
+        # real table, not the dbt model name which may differ).
         fqn = (
-            f"{database}.{schema_name}.{name}"
-            if database and schema_name and name
+            f"{database}.{schema_name}.{table_name}"
+            if database and schema_name and table_name
             else ""
         )
 
