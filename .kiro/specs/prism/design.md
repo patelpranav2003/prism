@@ -11,9 +11,9 @@ The full stack is:
 | Layer | Technology |
 |---|---|
 | Backend API | Python 3.11 + FastAPI + uvicorn |
-| LLM | Anthropic Claude API (`claude-sonnet-4-6`) |
+| LLM | Anthropic Claude API (`claude-sonnet-4-6`) — primary; OpenRouter (`openai` SDK, `anthropic/claude-sonnet-4-6`) — fallback if no Anthropic key |
 | Embeddings | `sentence-transformers` `all-MiniLM-L6-v2` + numpy |
-| SQL execution | `databricks-sql-connector` (workspace OAuth) |
+| SQL execution | `databricks-sql-connector` (workspace OAuth in production; `DATABRICKS_TOKEN` PAT in local dev) |
 | Artifact fetch | `httpx` async |
 | Frontend | React (TypeScript) + Vite |
 | Deployment | Databricks Apps via `app.yaml`; Docker image via multi-stage `Dockerfile` |
@@ -452,8 +452,11 @@ class AppConfig:
     gitlab_project_id: str
     gitlab_token: str                    # from Databricks secret scope
     databricks_sql_warehouse: str
-    anthropic_api_key: str               # from Databricks secret scope
     admin_password_hash: str             # bcrypt hash, from Databricks secret scope
+
+    # LLM provider — at least one must be set; Anthropic takes priority if both present
+    anthropic_api_key: str = ""          # from Databricks secret scope (primary)
+    openrouter_api_key: str = ""         # from Databricks secret scope (fallback)
 
     # Optional: explicit server hostname for databricks-sql-connector.
     # Empty string = connector infers from DATABRICKS_HOST (set automatically in Apps).
@@ -700,7 +703,7 @@ All secrets must be masked before any log output:
 
 ```python
 def mask_secret(value: str, secret_type: str) -> str:
-    if secret_type in ("GITLAB_TOKEN", "ANTHROPIC_API_KEY"):
+    if secret_type in ("GITLAB_TOKEN", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"):
         if len(value) <= 4:
             return "*" * len(value)
         return "*" * (len(value) - 4) + value[-4:]

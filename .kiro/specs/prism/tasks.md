@@ -276,7 +276,7 @@ Implement Prism as a Databricks App with a Python/FastAPI backend and a React/Ty
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 22. Docker containerization and distribution
-  - Create multi-stage `Dockerfile`: `node:20-slim` stage builds React frontend via `npm run build`; `python:3.11-slim` stage installs Python deps, copies compiled frontend, runs under non-root user `prism`
+  - Create multi-stage `Dockerfile`: `node:24-slim` stage builds React frontend via `npm run build`; `python:3.11-slim` stage installs Python deps, copies compiled frontend, runs under non-root user `prism`
   - Create `docker-compose.yml` with `env_file: .env`, port `8000:8000`, healthcheck polling `/api/status` with 60s start_period; no credentials in the compose file itself
   - Create `.github/workflows/docker-publish.yml`: authenticate to GHCR with auto-provided `secrets.GITHUB_TOKEN`; publish `:latest` on push to `main`, publish `:vX.Y.Z` on GitHub Release; no additional secrets required
   - _Requirements: 16.1, 16.2, 16.3_
@@ -288,7 +288,22 @@ Implement Prism as a Databricks App with a Python/FastAPI backend and a React/Ty
   - Add `databricks_server_hostname: str = ""` optional field to `AppConfig`; populate from `DATABRICKS_SERVER_HOSTNAME` env var; passed to `databricks-sql-connector` when non-empty, allowing explicit host override in Docker/local environments
   - _Requirements: 16.4, 16.5_
 
-- [ ] 24. Email-based admin authentication (future)
+- [x] 24. OpenRouter fallback LLM provider
+  - Add `openrouter_api_key: str = ""` to `AppConfig`; make `anthropic_api_key` optional (default `""`); validate at startup that at least one key is set
+  - Add `openai>=1.0.0` to `requirements.txt` (OpenRouter uses the OpenAI SDK)
+  - Refactor `SQLGenerator.generate()` into `_call_anthropic()` and `_call_openrouter()` private methods; select provider based on which key is configured — Anthropic takes priority
+  - Update `mask_secret()` to mask `OPENROUTER_API_KEY` identically to `ANTHROPIC_API_KEY`
+  - Update `.env.example` with `OPENROUTER_API_KEY` as a commented-out alternative
+  - _Requirements: 11.1, 11.3_
+
+- [x] 25. Local development PAT authentication and Python 3.11 requirement
+  - Modify `databricks_runner.py` to check `DATABRICKS_TOKEN` env var; if set use it as PAT via `credentials_provider`; otherwise fall back to workspace OAuth (production behavior unchanged)
+  - Add `DATABRICKS_HOST` and `DATABRICKS_TOKEN` to `.env.example` under a "local dev only" comment
+  - Document Python 3.11+ and Node.js 24+ as prerequisites in `README.md`; add venv creation steps
+  - Add `frontend/package-lock.json` to repo for reproducible Docker builds (`npm ci`)
+  - _Requirements: 6.2, 16.4_
+
+- [ ] 27. Email-based admin authentication (future)
   - Replace bcrypt `ADMIN_PASSWORD_HASH` gate in `POST /api/auth` with `X-Forwarded-Email` header validation
   - Add `ADMIN_ALLOWED_EMAILS` env var (comma-separated) to `AppConfig`; set in Databricks App UI
   - Update Settings page: remove password input; read authenticated email from `X-Forwarded-Email` header set by Databricks Apps SSO; show email in UI
