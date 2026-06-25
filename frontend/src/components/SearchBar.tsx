@@ -1,21 +1,14 @@
 import { useState, type FormEvent } from 'react'
 import type { CacheStatus } from '../types'
 
-const EXAMPLE_QUESTIONS = [
-  'What is total revenue by region last quarter?',
-  'Show me the top 10 customers by order count',
-  'How many new users signed up each month this year?',
-  'What is the average order value by product category?',
-  'Which products have declining sales over the last 3 months?',
-]
-
 interface Props {
   onSubmit: (question: string) => void
   loading: boolean
   cacheStatus: CacheStatus | null
+  suggestedQuestions?: string[]
 }
 
-export default function SearchBar({ onSubmit, loading, cacheStatus }: Props) {
+export default function SearchBar({ onSubmit, loading, cacheStatus, suggestedQuestions = [] }: Props) {
   const [question, setQuestion] = useState('')
   const disabled = loading || cacheStatus === 'unavailable' || cacheStatus === null
 
@@ -56,9 +49,9 @@ export default function SearchBar({ onSubmit, loading, cacheStatus }: Props) {
         </div>
       </form>
 
-      {cacheStatus !== 'unavailable' && (
+      {cacheStatus !== 'unavailable' && suggestedQuestions.length > 0 && (
         <div className="example-chips" role="list" aria-label="Example questions">
-          {EXAMPLE_QUESTIONS.map(q => (
+          {suggestedQuestions.map(q => (
             <button
               key={q}
               type="button"

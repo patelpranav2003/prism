@@ -131,6 +131,7 @@ class SQLGenerator:
         system_prompt: str,
         question: str,
         model_names: list[str] | None = None,
+        history: list | None = None,
     ) -> SQLResult | GenerationError:
         """Call Claude and return a validated :class:`~backend.models.SQLResult`.
 
@@ -161,9 +162,9 @@ class SQLGenerator:
 
         try:
             if provider == "anthropic":
-                raw_text, in_tok, out_tok = await self._call_anthropic(system_prompt, question)
+                raw_text, in_tok, out_tok = await self._call_anthropic(system_prompt, question, history)
             else:
-                raw_text, in_tok, out_tok = await self._call_openrouter(system_prompt, question)
+                raw_text, in_tok, out_tok = await self._call_openrouter(system_prompt, question, history)
 
             logger.info(
                 "SQLGenerator: %s responded — input_tokens=%d, output_tokens=%d",
@@ -229,18 +230,20 @@ class SQLGenerator:
     # ------------------------------------------------------------------
 
     async def _call_anthropic(
-        self, system_prompt: str, question: str
+        self, system_prompt: str, question: str, history: list | None = None
     ) -> tuple[str, int, int]:
         import anthropic  # lazy import
         client = anthropic.AsyncAnthropic(
             api_key=self._config.anthropic_api_key,
             timeout=_TIMEOUT_SECONDS,
         )
+        messages = [{"role": msg.role, "content": msg.content} for msg in (history or [])]
+        messages.append({"role": "user", "content": question})
         message = await client.messages.create(
             model=_CLAUDE_MODEL,
             max_tokens=_MAX_TOKENS,
             system=system_prompt,
-            messages=[{"role": "user", "content": question}],
+            messages=messages,
         )
         raw_text = "".join(
             block.text for block in message.content if hasattr(block, "text")
@@ -248,7 +251,7 @@ class SQLGenerator:
         return raw_text, message.usage.input_tokens, message.usage.output_tokens
 
     async def _call_openrouter(
-        self, system_prompt: str, question: str
+        self, system_prompt: str, question: str, history: list | None = None
     ) -> tuple[str, int, int]:
         from openai import AsyncOpenAI  # lazy import
         client = AsyncOpenAI(
@@ -256,13 +259,14 @@ class SQLGenerator:
             api_key=self._config.openrouter_api_key,
             timeout=_TIMEOUT_SECONDS,
         )
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in (history or []):
+            messages.append({"role": msg.role, "content": msg.content})
+        messages.append({"role": "user", "content": question})
         completion = await client.chat.completions.create(
             model=_OPENROUTER_MODEL,
             max_tokens=_MAX_TOKENS,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
-            ],
+            messages=messages,
         )
         raw_text = completion.choices[0].message.content or ""
         return raw_text, completion.usage.prompt_tokens, completion.usage.completion_tokens

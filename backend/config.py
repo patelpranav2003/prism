@@ -45,6 +45,13 @@ class AppConfig:
     refresh_interval_hours: int = 6
     retry_interval_minutes: int = 5
 
+    # Optional app identity — shown in the UI sidebar footer
+    owner_name: str = ""         # PRISM_OWNER_NAME
+    owner_title: str = ""        # PRISM_OWNER_TITLE
+    owner_email: str = ""        # PRISM_OWNER_EMAIL
+    team_name: str = ""          # PRISM_TEAM_NAME
+    company_name: str = ""       # PRISM_COMPANY_NAME
+
     @classmethod
     def from_env(cls) -> "AppConfig":
         """Construct AppConfig from environment variables.
@@ -73,6 +80,11 @@ class AppConfig:
             default_row_limit=int(os.environ.get("DEFAULT_ROW_LIMIT", "1000")),
             refresh_interval_hours=int(os.environ.get("REFRESH_INTERVAL_HOURS", "6")),
             retry_interval_minutes=int(os.environ.get("RETRY_INTERVAL_MINUTES", "5")),
+            owner_name=os.environ.get("PRISM_OWNER_NAME", ""),
+            owner_title=os.environ.get("PRISM_OWNER_TITLE", ""),
+            owner_email=os.environ.get("PRISM_OWNER_EMAIL", ""),
+            team_name=os.environ.get("PRISM_TEAM_NAME", ""),
+            company_name=os.environ.get("PRISM_COMPANY_NAME", ""),
         )
 
 

@@ -20,12 +20,15 @@ Requirements: 2.6, 6.3, 9.4, 10.1, 10.4, 13.1
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from backend.api.models import (
+    AppIdentityRequest,
+    AppIdentityResponse,
     AuthRequest,
     AuthResponse,
     ColumnMetaSummary,
@@ -78,6 +81,10 @@ def get_config(request: Request):
     return request.app.state.config
 
 
+def get_settings_store(request: Request):
+    return request.app.state.settings_store
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -85,6 +92,33 @@ def get_config(request: Request):
 
 def _correlation_id() -> str:
     return correlation_id_var.get("")
+
+
+# Matches catalog.schema.table FQNs with optional backtick quoting,
+# e.g. marketing-low.amazon_dsp_bronze.product or `marketing-low`.`amazon_dsp_silver`.`ad__day`
+_FQN_RE = re.compile(r"`?([\w-]+)`?\.`?([\w_]+)`?\.`?([\w_]+)`?")
+
+# Short common English words that carry no domain signal for model lookup
+_KEYWORD_STOPWORDS = frozenset({
+    "a", "an", "the", "and", "or", "for", "to", "in", "of", "on", "at", "by",
+    "is", "are", "was", "do", "we", "our", "me", "my", "it", "its", "have",
+    "has", "can", "you", "all", "any", "how", "why", "what", "when", "which",
+    "who", "give", "get", "show", "list", "find", "use", "make", "need",
+    "with", "from", "into", "out", "up", "as", "be", "this", "that", "not",
+})
+
+
+def _extract_fqns(text: str) -> list[str]:
+    """Return all catalog.schema.table references found in *text*."""
+    return [f"{m.group(1)}.{m.group(2)}.{m.group(3)}" for m in _FQN_RE.finditer(text)]
+
+
+def _domain_keywords(text: str) -> list[str]:
+    """Extract significant domain words (3+ chars, not stopwords) from *text*."""
+    return [
+        w for w in re.findall(r"[a-z]+", text.lower())
+        if len(w) >= 3 and w not in _KEYWORD_STOPWORDS
+    ]
 
 
 def _error_response(msg: str, http_status: int = 500) -> HTTPException:
@@ -126,42 +160,95 @@ async def query(
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    # --- Embed question ---
+    # --- Embed question (enrich with prior user questions for retrieval) ---
+    # Current question leads so its domain signal (e.g. "amazon dsp") drives
+    # retrieval. Prior USER questions add context for domain-ambiguous follow-ups
+    # ("show this for all brands"). Assistant messages are excluded — their table
+    # names anchor retrieval to the prior domain and drown out domain switches.
     try:
-        question_vec = embedder.embed_question(body.question)
+        embedding_query = body.question
+        if body.history:
+            prior_user = [m.content for m in body.history if m.role == "user"]
+            if prior_user:
+                embedding_query = body.question + " | " + " | ".join(prior_user)
+        question_vec = embedder.embed_question(embedding_query)
     except Exception as exc:
         logger.error("routes.query: embedding failed — %s", exc)
         raise _error_response("Failed to process your question. Please try again.")
 
     # --- Retrieve relevant models ---
-    ranked_models = retriever.retrieve(question_vec, top_n=8)
+    ranked_models = retriever.retrieve(question_vec, top_n=20)
     if not ranked_models:
         raise _error_response(
             "No relevant models found in the schema for your question.",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
-    # --- Expand with depends_on parents (dimension/lookup tables) ---
-    # Build a name→model lookup for fast resolution
+    from backend.models import RankedModel
+    MAX_MODELS = 40
     model_by_name = {m.name: m for m in index.models}
     existing_names = {rm.model.name for rm in ranked_models}
-    from backend.models import RankedModel
-    for rm in list(ranked_models):
-        for dep in rm.model.depends_on:
-            # depends_on entries are like "model.project.model_name" — take last segment
-            dep_name = dep.rsplit(".", 1)[-1] if "." in dep else dep
-            if dep_name not in existing_names:
-                dep_model = model_by_name.get(dep_name)
-                if dep_model is not None:
-                    ranked_models.append(
-                        RankedModel(
+
+    # --- Keyword-based retrieval enrichment ---
+    # Semantic similarity alone can miss models when a domain keyword ("amazon dsp",
+    # "walmart connect") appears in the question. We extract words from the question,
+    # keep only those that actually appear in at least one model FQN (filtering out
+    # generic English words like "models", "clicks", "total" that never appear in
+    # FQNs), then add every model whose FQN contains ALL surviving keywords.
+    # No cap here — all matching domain models are always included.
+    all_fqns_lower = {m.fqn.lower().replace("-", "_") for m in index.models}
+    raw_kws = _domain_keywords(body.question)
+    domain_kws = [w for w in raw_kws if any(w in fqn for fqn in all_fqns_lower)]
+    if domain_kws:
+        for m in index.models:
+            fqn_lower = m.fqn.lower().replace("-", "_")
+            if all(kw in fqn_lower for kw in domain_kws) and m.name not in existing_names:
+                ranked_models.append(
+                    RankedModel(model=m, raw_similarity=0.2, adjusted_score=0.2, confidence_hint=None)
+                )
+                existing_names.add(m.name)
+
+    # --- Inject any tables the user explicitly named in their question ---
+    # Technical instruction messages ("use table X joined on Y") have poor
+    # embedding signal. Extracting FQNs directly ensures the named tables are
+    # always in the prompt regardless of retrieval score.
+    explicit_fqns = _extract_fqns(body.question)
+    if explicit_fqns:
+        model_by_fqn = {m.fqn: m for m in index.models}
+        for fqn in explicit_fqns:
+            m = model_by_fqn.get(fqn)
+            if m and m.name not in existing_names:
+                ranked_models.append(
+                    RankedModel(model=m, raw_similarity=1.0, adjusted_score=1.0, confidence_hint=None)
+                )
+                existing_names.add(m.name)
+
+    # --- Expand depends_on parents via full BFS (no hop limit, model cap) ---
+    # Single-level expansion misses dimension tables that are 2+ hops away
+    # (e.g. ad__day → campaign → advertiser). A fixed hop count is fragile
+    # for deep dbt lineages. Instead we do a full BFS across all ancestor
+    # levels, stopping only when we run out of new parents or hit MAX_MODELS.
+    frontier = list(ranked_models)
+    while frontier and len(ranked_models) < MAX_MODELS:
+        next_frontier = []
+        for rm in frontier:
+            for dep in rm.model.depends_on:
+                if len(ranked_models) >= MAX_MODELS:
+                    break
+                dep_name = dep.rsplit(".", 1)[-1] if "." in dep else dep
+                if dep_name not in existing_names:
+                    dep_model = model_by_name.get(dep_name)
+                    if dep_model is not None:
+                        new_rm = RankedModel(
                             model=dep_model,
                             raw_similarity=0.0,
                             adjusted_score=0.0,
                             confidence_hint=None,
                         )
-                    )
-                    existing_names.add(dep_name)
+                        ranked_models.append(new_rm)
+                        next_frontier.append(new_rm)
+                        existing_names.add(dep_name)
+        frontier = next_frontier
 
     model_names = [rm.model.name for rm in ranked_models]
 
@@ -175,36 +262,39 @@ async def query(
         system_prompt=system_prompt,
         question=body.question,
         model_names=model_names,
+        history=body.history or None,
     )
     if isinstance(sql_result, GenerationError):
         raise _error_response(str(sql_result), status.HTTP_502_BAD_GATEWAY)
 
-    # --- Execute SQL ---
-    start_ms = int(time.monotonic() * 1000)
-    try:
-        query_runner = query_runner_factory(sql_generator)
-        rows = await query_runner.execute(
-            sql=sql_result.sql,
-            row_limit=body.row_limit,
-            question=body.question,
-            system_prompt=system_prompt,
-            model_names=model_names,
-        )
-    except SecurityError as exc:
-        logger.warning("routes.query: DDL/DML blocked — %s", exc)
-        raise _error_response(
-            "Unable to execute — invalid query type.",
-            status.HTTP_400_BAD_REQUEST,
-        )
-    except RuntimeError as exc:
-        raise _error_response(str(exc), status.HTTP_502_BAD_GATEWAY)
-    except Exception as exc:
-        logger.error("routes.query: execution error — %s", exc)
-        raise _error_response(
-            "Query execution failed. Please try rephrasing your question."
-        )
-
-    execution_time_ms = int(time.monotonic() * 1000) - start_ms
+    # --- Execute SQL (skip for conversational / schema-exploration responses) ---
+    execution_time_ms = 0
+    rows: list[dict] = []
+    if sql_result.sql.strip():
+        start_ms = int(time.monotonic() * 1000)
+        try:
+            query_runner = query_runner_factory(sql_generator)
+            rows = await query_runner.execute(
+                sql=sql_result.sql,
+                row_limit=body.row_limit,
+                question=body.question,
+                system_prompt=system_prompt,
+                model_names=model_names,
+            )
+        except SecurityError as exc:
+            logger.warning("routes.query: DDL/DML blocked — %s", exc)
+            raise _error_response(
+                "Unable to execute — invalid query type.",
+                status.HTTP_400_BAD_REQUEST,
+            )
+        except RuntimeError as exc:
+            raise _error_response(str(exc), status.HTTP_502_BAD_GATEWAY)
+        except Exception as exc:
+            logger.error("routes.query: execution error — %s", exc)
+            raise _error_response(
+                "Query execution failed. Please try rephrasing your question."
+            )
+        execution_time_ms = int(time.monotonic() * 1000) - start_ms
 
     return QueryResponse(
         sql_result=PydanticSQLResult(
@@ -228,13 +318,23 @@ async def query(
 
 
 @router.get("/status", response_model=StatusResponse)
-async def get_status(cache=Depends(get_cache)) -> StatusResponse:
-    """Return current cache status, model count, and last refresh time."""
+async def get_status(
+    cache=Depends(get_cache),
+    config=Depends(get_config),
+    settings_store=Depends(get_settings_store),
+) -> StatusResponse:
+    """Return current cache status, model count, last refresh time, and app identity."""
     meta = cache.get_meta()
+    identity = settings_store.load()
     return StatusResponse(
         cache_status=meta.status,
         last_refresh_utc=meta.last_refresh_utc,
         model_count=meta.model_count,
+        owner_name=identity.owner_name or config.owner_name or None,
+        owner_title=identity.owner_title or config.owner_title or None,
+        owner_email=identity.owner_email or config.owner_email or None,
+        team_name=identity.team_name or config.team_name or None,
+        company_name=identity.company_name or config.company_name or None,
     )
 
 
@@ -347,6 +447,60 @@ async def get_schema_model(
         compiled_sql_excerpt=model.compiled_sql_excerpt,
         parents=lineage.parents if lineage else [],
         children=lineage.children if lineage else [],
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/settings/info  (public — identity is already shown in the UI)
+# POST /api/settings/info (admin only — requires password)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/settings/info", response_model=AppIdentityResponse)
+async def get_app_identity(
+    settings_store=Depends(get_settings_store),
+    config=Depends(get_config),
+) -> AppIdentityResponse:
+    """Return the current app identity fields (settings store takes priority over env vars)."""
+    identity = settings_store.load()
+    return AppIdentityResponse(
+        owner_name=identity.owner_name or config.owner_name,
+        owner_title=identity.owner_title or config.owner_title,
+        owner_email=identity.owner_email or config.owner_email,
+        team_name=identity.team_name or config.team_name,
+        company_name=identity.company_name or config.company_name,
+    )
+
+
+@router.post("/settings/info", response_model=AppIdentityResponse)
+async def save_app_identity(
+    body: AppIdentityRequest,
+    settings_store=Depends(get_settings_store),
+    config=Depends(get_config),
+) -> AppIdentityResponse:
+    """Admin: persist app identity fields. Requires the admin password."""
+    if not _check_password(body.password, config.admin_password_hash):
+        raise _error_response("Incorrect password.", status.HTTP_403_FORBIDDEN)
+
+    from backend.settings_store import AppIdentity
+    identity = AppIdentity(
+        owner_name=body.owner_name,
+        owner_title=body.owner_title,
+        owner_email=body.owner_email,
+        team_name=body.team_name,
+        company_name=body.company_name,
+    )
+    try:
+        settings_store.save(identity)
+    except RuntimeError as exc:
+        raise _error_response(str(exc))
+
+    return AppIdentityResponse(
+        owner_name=identity.owner_name,
+        owner_title=identity.owner_title,
+        owner_email=identity.owner_email,
+        team_name=identity.team_name,
+        company_name=identity.company_name,
     )
 
 

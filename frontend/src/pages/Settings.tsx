@@ -1,6 +1,14 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { StatusResponse } from '../types'
-import { authenticate, fetchStatus, triggerRefresh } from '../api'
+import type { AppIdentityData, StatusResponse } from '../types'
+import { authenticate, fetchAppIdentity, fetchStatus, saveAppIdentity, triggerRefresh } from '../api'
+
+const EMPTY_IDENTITY: AppIdentityData = {
+  owner_name: '',
+  owner_title: '',
+  owner_email: '',
+  team_name: '',
+  company_name: '',
+}
 
 export default function Settings() {
   const [password, setPassword] = useState('')
@@ -10,9 +18,15 @@ export default function Settings() {
   const [refreshState, setRefreshState] = useState<'idle' | 'refreshing' | 'error' | 'success'>('idle')
   const [refreshError, setRefreshError] = useState<string | null>(null)
 
+  // App Identity
+  const [identity, setIdentity] = useState<AppIdentityData>(EMPTY_IDENTITY)
+  const [identitySaveState, setIdentitySaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [identityError, setIdentityError] = useState<string | null>(null)
+
   useEffect(() => {
     if (authenticated) {
       fetchStatus().then(setStatus).catch(() => {})
+      fetchAppIdentity().then(setIdentity).catch(() => {})
     }
   }, [authenticated])
 
@@ -47,6 +61,21 @@ export default function Settings() {
     } catch (e: unknown) {
       setRefreshState('error')
       setRefreshError(e instanceof Error ? e.message : 'Refresh failed')
+    }
+  }
+
+  async function handleSaveIdentity(e: FormEvent) {
+    e.preventDefault()
+    setIdentitySaveState('saving')
+    setIdentityError(null)
+    try {
+      const saved = await saveAppIdentity(password, identity)
+      setIdentity(saved)
+      setIdentitySaveState('saved')
+      setTimeout(() => setIdentitySaveState('idle'), 3000)
+    } catch (e: unknown) {
+      setIdentitySaveState('error')
+      setIdentityError(e instanceof Error ? e.message : 'Save failed')
     }
   }
 
@@ -123,6 +152,87 @@ export default function Settings() {
               ✗ Refresh failed: {refreshError}
             </p>
           )}
+        </section>
+
+        <section className="settings-section">
+          <h2>App Identity</h2>
+          <p className="settings-section-desc">
+            These details appear in the Schema Explorer sidebar so users know who to contact about this deployment.
+          </p>
+          <form onSubmit={handleSaveIdentity} className="identity-form">
+            <div className="identity-grid">
+              <div className="identity-field">
+                <label htmlFor="owner-name">Owner Name</label>
+                <input
+                  id="owner-name"
+                  type="text"
+                  placeholder="e.g. Jane Smith"
+                  value={identity.owner_name}
+                  onChange={e => setIdentity(prev => ({ ...prev, owner_name: e.target.value }))}
+                />
+              </div>
+              <div className="identity-field">
+                <label htmlFor="owner-title">Owner Title</label>
+                <input
+                  id="owner-title"
+                  type="text"
+                  placeholder="e.g. Data Engineer"
+                  value={identity.owner_title}
+                  onChange={e => setIdentity(prev => ({ ...prev, owner_title: e.target.value }))}
+                />
+              </div>
+              <div className="identity-field">
+                <label htmlFor="owner-email">Owner Email</label>
+                <input
+                  id="owner-email"
+                  type="email"
+                  placeholder="e.g. owner@company.com"
+                  value={identity.owner_email}
+                  onChange={e => setIdentity(prev => ({ ...prev, owner_email: e.target.value }))}
+                />
+              </div>
+              <div className="identity-field">
+                <label htmlFor="team-name">Team Name</label>
+                <input
+                  id="team-name"
+                  type="text"
+                  placeholder="e.g. Data Platform"
+                  value={identity.team_name}
+                  onChange={e => setIdentity(prev => ({ ...prev, team_name: e.target.value }))}
+                />
+              </div>
+              <div className="identity-field identity-field-full">
+                <label htmlFor="company-name">Company Name</label>
+                <input
+                  id="company-name"
+                  type="text"
+                  placeholder="e.g. Acme Corp"
+                  value={identity.company_name}
+                  onChange={e => setIdentity(prev => ({ ...prev, company_name: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="identity-actions">
+              <button
+                type="submit"
+                disabled={identitySaveState === 'saving'}
+                className="save-identity-btn"
+              >
+                {identitySaveState === 'saving' ? 'Saving…' : 'Save Identity'}
+              </button>
+              {identitySaveState === 'saved' && (
+                <p className="refresh-success" role="status" aria-live="polite">
+                  ✓ Saved — sidebar footer will update immediately
+                </p>
+              )}
+              {identitySaveState === 'error' && identityError && (
+                <p className="refresh-error" role="alert" aria-live="assertive">
+                  ✗ {identityError}
+                </p>
+              )}
+            </div>
+          </form>
         </section>
       </div>
     </div>

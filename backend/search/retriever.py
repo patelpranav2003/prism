@@ -37,9 +37,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Gold/Silver/Bronze score boosts (Requirement 4.5)
+# Strong enough to be decisive when two tables are equally relevant,
+# without blocking silver fact tables that are legitimately the right answer.
 _LAYER_BOOST: dict[str, float] = {
-    "gold": 0.05,
-    "silver": 0.025,
+    "gold": 0.15,
+    "silver": 0.08,
     "bronze": 0.0,
 }
 

@@ -279,7 +279,7 @@ class ManifestParser:
         return result
 
     def _parse_compiled_sql(self, node: dict, model_name: str) -> str:
-        """Return the first 500 characters of compiled SQL.
+        """Return the full compiled SQL for this model.
 
         Prefers the ``compiled_code`` key (dbt ≥1.3) and falls back to
         ``compiled_sql`` (dbt <1.3).  Returns '' on missing/null.
@@ -289,7 +289,7 @@ class ManifestParser:
             if value is _MISSING or value is None:
                 continue
             if isinstance(value, str):
-                return value[:500]
+                return value
             logger.warning(
                 "Model '%s': field '%s' has unexpected type %s; using ''",
                 model_name, key, type(value).__name__,
