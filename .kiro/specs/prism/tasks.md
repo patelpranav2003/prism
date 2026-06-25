@@ -343,6 +343,32 @@ Implement Prism as a Databricks App with a Python/FastAPI backend and a React/Ty
     - Ensures JOIN candidates are always available in the prompt context
     - _Requirements: 4.4, 5.1_
 
+- [x] 28. UI redesign — Prism standalone branding and chat interface
+  - [x] 28.1 Remove all ZURU branding; replace with Prism gradient triangle SVG logo and gradient "Prism" text
+  - [x] 28.2 Redesign chat interface: gradient welcome screen, indigo accents on cards/buttons/focus rings, gradient send button
+  - [x] 28.3 Replace static example question chips with dynamic chips generated from gold models: group by domain prefix, shuffle domains per page load, pick one model per domain; computed once on schema load and fixed for the session
+  - [x] 28.4 Add horizontal resize to Schema Explorer sidebar (drag handle, 220–640 px) and model detail panel (drag handle on left edge, 300–860 px)
+  - [x] 28.5 Schema Explorer CSS fix: model list scrolls internally (flex:1 overflow-y:auto); header, search, and any footer remain pinned (overflow:hidden on container)
+  - _Requirements: 8.1, 8.2, 9.1_
+
+- [x] 29. Query accuracy and prompt improvements
+  - [x] 29.1 Fix keyword retrieval: filter domain_kws to only words present in at least one model FQN before `all()` match; remove MAX_MODELS cap from keyword enrichment block
+  - [x] 29.2 BFS depends_on expansion: full traversal across all ancestor levels (no hop limit); MAX_MODELS=40 cap applies only to BFS, not keyword block
+  - [x] 29.3 Store full compiled SQL in ManifestParser (remove `[:500]` truncation); truncate to 1500 chars only in LLM prompt; show full SQL in Schema Explorer
+  - [x] 29.4 Add prompt rule: ALL conditions from the question must appear in every generated query (no dropping filters in peek/intermediate steps)
+  - [x] 29.5 Add prompt rule: match temporal granularity — daily question → daily-grain model, never weekly
+  - [x] 29.6 Add prompt rule: answer fidelity — precise questions return exactly what was asked; exploratory questions may include context columns but never auto-enrich with unrequested JOINs
+  - _Requirements: 3.2, 5.1, 5.2_
+
+- [x] 30. App Identity — configurable owner/team details
+  - [x] 30.1 Add 5 optional identity fields to `AppConfig`: `owner_name`, `owner_title`, `owner_email`, `team_name`, `company_name`; loaded from `PRISM_*` env vars
+  - [x] 30.2 Implement `backend/settings_store.py`: `SettingsStore` class reads/writes `prism_settings.json` in project root; settings-UI values take priority over env vars
+  - [x] 30.3 Add `GET /api/settings/info` (public) and `POST /api/settings/info` (admin-gated) endpoints; add `AppIdentityRequest` and `AppIdentityResponse` Pydantic models
+  - [x] 30.4 Update `GET /api/status` to merge identity from settings store (priority) and env vars (fallback) into `StatusResponse`
+  - [x] 30.5 Add "App Identity" section to Settings page with 5 labelled inputs and a Save button (password re-used from session); form pre-fills from `GET /api/settings/info` on load
+  - [x] 30.6 Display identity as a subtle muted footer line at bottom of chat page: Name · Title · email · Team · Company (only when at least one field is set; hidden once a conversation starts... actually always visible at bottom)
+  - _Requirements: 10.7 (new)_
+
 - [ ] 27. Email-based admin authentication (future)
   - Replace bcrypt `ADMIN_PASSWORD_HASH` gate in `POST /api/auth` with `X-Forwarded-Email` header validation
   - Add `ADMIN_ALLOWED_EMAILS` env var (comma-separated) to `AppConfig`; set in Databricks App UI

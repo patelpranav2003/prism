@@ -86,7 +86,7 @@ def _infer_layer(model: ModelMeta) -> str:
 def _infer_grain(model: ModelMeta) -> str:
     """Infer the grain for *model* when ``meta.grain`` is absent (Requirement 3.6).
 
-    Scans the first 500 characters of ``compiled_sql_excerpt``:
+    Scans the compiled SQL of ``compiled_sql_excerpt``:
 
     Priority order:
       1. GROUP BY clause present → return the GROUP BY columns as a
@@ -100,7 +100,7 @@ def _infer_grain(model: ModelMeta) -> str:
     str
         The inferred grain string, or ``"unknown"`` when nothing matches.
     """
-    sql = model.compiled_sql_excerpt[:500]  # already capped but be safe
+    sql = model.compiled_sql_excerpt[:500]  # only need the header for grain inference
 
     # --- Priority 1: GROUP BY ---
     # Match "GROUP BY <columns>" — capture everything up to the next SQL clause

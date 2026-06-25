@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Layer, SchemaModelDetail, SchemaModelSummary } from '../types'
 import { fetchSchemaModel } from '../api'
 
@@ -26,7 +26,27 @@ export default function SchemaExplorer({ models, highlightModel, onClose }: Prop
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [modelDetail, setModelDetail] = useState<SchemaModelDetail | null>(null)
   const [loadingDetail, setLoadingDetail] = useState(false)
+  const [detailWidth, setDetailWidth] = useState(440)
+  const detailDragging = useRef(false)
   const debouncedSearch = useDebounce(search, 300)
+
+  function handleDetailResizeMouseDown(e: React.MouseEvent) {
+    e.preventDefault()
+    detailDragging.current = true
+    const startX = e.clientX
+    const startWidth = detailWidth
+    function onMove(ev: MouseEvent) {
+      if (!detailDragging.current) return
+      setDetailWidth(Math.max(300, Math.min(860, startWidth + startX - ev.clientX)))
+    }
+    function onUp() {
+      detailDragging.current = false
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   useEffect(() => {
     if (highlightModel) {
@@ -126,7 +146,8 @@ export default function SchemaExplorer({ models, highlightModel, onClose }: Prop
       </div>
 
       {selectedModel && (
-        <div className="schema-detail-panel" aria-live="polite" aria-label={`Schema detail for ${selectedModel}`}>
+        <div className="schema-detail-panel" style={{ width: detailWidth }} aria-live="polite" aria-label={`Schema detail for ${selectedModel}`}>
+          <div className="detail-resize-handle" onMouseDown={handleDetailResizeMouseDown} title="Drag to resize" />
           <button type="button" className="close-detail-btn" onClick={() => setSelectedModel(null)} aria-label="Close detail panel">
             ✕
           </button>
@@ -183,6 +204,13 @@ function ModelDetailView({ detail }: { detail: SchemaModelDetail }) {
           <h4>Lineage</h4>
           {detail.parents.length > 0 && <p><strong>Depends on:</strong> {detail.parents.join(', ')}</p>}
           {detail.children.length > 0 && <p><strong>Used by:</strong> {detail.children.join(', ')}</p>}
+        </div>
+      )}
+
+      {detail.compiled_sql_excerpt && (
+        <div className="detail-sql">
+          <h4>Model SQL</h4>
+          <pre className="sql-excerpt"><code>{detail.compiled_sql_excerpt}</code></pre>
         </div>
       )}
     </div>

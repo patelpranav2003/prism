@@ -53,6 +53,9 @@ _DIALECT_RULES = """
 - Never write SELECT * — always list specific column names
 - Databricks SQL does not support FULL OUTER JOIN ON TRUE; use CROSS JOIN instead
 - IMPORTANT: When filtering by brand, product, or other named entity: (1) If a dimension/lookup table is available (e.g. portfolio, brand, dim_brands), always JOIN the fact table to it on the shared ID key (e.g. portfolio_id, brand_id) and filter on the dimension table's name column — this is the authoritative source and avoids NULL gaps in denormalized columns. (2) Only filter directly on a denormalized name column (e.g. `brand` on a fact table) when no dimension table is available. (3) Always use case-insensitive partial match: `LOWER(column) LIKE '%keyword%'` — never exact equality since stored values may include extra words (e.g. 'MONDAY Haircare' not 'monday').
+- IMPORTANT: Every SQL query you generate — whether exploratory, a data preview, or a final answer — must apply ALL conditions the user specified (filters, time ranges, metric thresholds, marketplace, etc.). Never omit a condition from an intermediate query because it feels like a structural check; a query that drops the user's filters returns misleading data.
+- IMPORTANT: Match temporal granularity — the grain of the table you choose MUST match the granularity the question asks for. If the question asks about "days" or "daily", use a daily-grain model (e.g. a `__day` or `_daily` table), NOT a weekly or monthly model. A gold weekly model must never be used to count "days" — the rows represent week-end snapshots, so counting them gives the wrong number. Always check the model grain shown in the schema blocks before writing the query. When a question asks for day-level analysis and only a weekly gold model and a daily silver model are available, use the silver daily model.
+- IMPORTANT: When querying a model that unions multiple distributor views or record types (e.g. SOURCING vs MANUFACTURING), always filter to a single view unless the question explicitly asks to combine them. Unfiltered queries on such tables double-count values. Check the model description and SQL excerpt for clues about what `distributor_view`, `record_type`, or similar partitioning columns exist.
 """.strip()
 
 
@@ -114,25 +117,26 @@ class PromptBuilder:
 
         # --- Preamble ---
         sections.append(
-            "You are a Databricks SQL expert assistant. Your task is to answer "
-            "the user's data question by generating a valid Databricks SQL query "
-            "based ONLY on the schemas provided below. Do not invent tables or "
-            "columns that are not listed.\n\n"
-            "Respond with ONLY a JSON object containing these five fields:\n"
-            '  "sql": "<valid SQL>",\n'
-            '  "explanation": "<plain-English explanation>",\n'
+            "You are a data exploration assistant with full knowledge of the dbt models, "
+            "schemas, and Databricks warehouse available to this organisation. "
+            "You help users query data, explore schemas, understand models, and analyse results.\n\n"
+            "Always respond with ONLY a JSON object — no markdown fences, no text outside it:\n"
+            '{\n'
+            '  "sql": "<Databricks SQL query, or empty string if no query is needed>",\n'
+            '  "explanation": "<your full response>",\n'
             '  "models_used": ["<fqn1>", "<fqn2>"],\n'
             '  "confidence": "high" | "medium" | "low",\n'
-            '  "confidence_reason": "<brief reason>"\n\n'
-            "Guidance on model selection:\n"
-            "- If multiple models exist at different grains (e.g. ad-level, campaign-level, "
-            "product-level) that could answer the question, choose the grain that best "
-            "matches the question intent. State clearly in your explanation WHICH table "
-            "you chose, at WHAT grain, and WHY. If the choice is ambiguous, note the "
-            "alternative table(s) and how they would give different results.\n"
-            "- Set confidence='medium' when you had to choose between multiple models at "
-            "different grains and the question did not specify which level was intended.\n\n"
-            "Do NOT wrap the JSON in markdown code fences or add any text outside it."
+            '  "confidence_reason": "<brief reason>"\n'
+            '}\n\n'
+            "Use your judgement to decide whether the message needs SQL or not. "
+            "When writing SQL, use ONLY the tables and columns defined in the schemas below — "
+            "never invent tables or columns that are not listed.\n\n"
+            "Match the scope of your query to the specificity of the user's question. "
+            "For precise questions (a count, a total, a specific metric), return exactly that — "
+            "do not add extra JOINs, columns, or GROUP BY breakdowns that were not requested. "
+            "For open or exploratory questions ('show me', 'list', 'what products…'), include "
+            "enough context columns (e.g. date, identifier, name) to make the result interpretable, "
+            "but still avoid adding dimensions or tables beyond what is needed to answer the question."
         )
 
         # --- Schema blocks ---
@@ -199,9 +203,12 @@ class PromptBuilder:
         lines.append(f"- **Columns** ({len(columns)} shown):\n{cols_str}")
 
         if model.compiled_sql_excerpt:
+            sql_in_prompt = model.compiled_sql_excerpt[:1500]
+            truncated = len(model.compiled_sql_excerpt) > 1500
+            label = "SQL excerpt (first 1500 chars)" if truncated else "SQL"
             lines.append(
-                f"- **SQL excerpt** (first 500 chars):\n"
-                f"  ```sql\n  {model.compiled_sql_excerpt}\n  ```"
+                f"- **{label}**:\n"
+                f"  ```sql\n  {sql_in_prompt}\n  ```"
             )
 
         return "\n".join(lines)

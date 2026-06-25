@@ -35,6 +35,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.api.routes import router
 from backend.config import AppConfig
+from backend.settings_store import SettingsStore
 from backend.discovery.cache_manager import CacheManager
 from backend.discovery.gitlab_fetcher import ArtifactFetcher
 from backend.discovery.index_builder import IndexBuilder
@@ -93,8 +94,12 @@ async def lifespan(app: FastAPI):
         from backend.execution.databricks_runner import QueryRunner
         return QueryRunner(config, sql_gen)
 
+    # --- Settings store (persistent app identity) ---
+    settings_store = SettingsStore()
+
     # --- Attach to app.state ---
     app.state.config = config
+    app.state.settings_store = settings_store
     app.state.embedder = embedder
     app.state.cache = cache
     app.state.retriever = retriever

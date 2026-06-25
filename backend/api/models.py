@@ -1,12 +1,18 @@
 from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Optional
+
+
+class ConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class QueryRequest(BaseModel):
     question: str
     row_limit: int = Field(default=1000, ge=1, le=10000)
-    correlation_id: str | None = None
+    history: list[ConversationMessage] = Field(default_factory=list)
+    correlation_id: Optional[str] = None
 
 
 class SQLResult(BaseModel):
@@ -28,14 +34,19 @@ class QueryResponse(BaseModel):
 
 class StatusResponse(BaseModel):
     cache_status: Literal["fresh", "stale", "unavailable"]
-    last_refresh_utc: datetime | None
+    last_refresh_utc: Optional[datetime]
     model_count: int
+    owner_name: Optional[str] = None
+    owner_title: Optional[str] = None
+    owner_email: Optional[str] = None
+    team_name: Optional[str] = None
+    company_name: Optional[str] = None
 
 
 class RefreshResponse(BaseModel):
     success: bool
-    model_count: int | None
-    error: str | None
+    model_count: Optional[int]
+    error: Optional[str]
 
 
 class AuthRequest(BaseModel):
@@ -44,6 +55,23 @@ class AuthRequest(BaseModel):
 
 class AuthResponse(BaseModel):
     authenticated: bool
+
+
+class AppIdentityResponse(BaseModel):
+    owner_name: str = ""
+    owner_title: str = ""
+    owner_email: str = ""
+    team_name: str = ""
+    company_name: str = ""
+
+
+class AppIdentityRequest(BaseModel):
+    password: str
+    owner_name: str = ""
+    owner_title: str = ""
+    owner_email: str = ""
+    team_name: str = ""
+    company_name: str = ""
 
 
 class ColumnMetaSummary(BaseModel):
@@ -59,7 +87,7 @@ class SchemaModelSummary(BaseModel):
     description: str
     column_count: int
     row_count: int
-    last_updated: datetime | None
+    last_updated: Optional[datetime]
 
 
 class SchemaModelDetail(BaseModel):
@@ -70,7 +98,7 @@ class SchemaModelDetail(BaseModel):
     grain: str
     columns: list[ColumnMetaSummary]
     row_count: int
-    last_updated: datetime | None
+    last_updated: Optional[datetime]
     depends_on: list[str]
     tags: list[str]
     compiled_sql_excerpt: str

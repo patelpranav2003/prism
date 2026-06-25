@@ -35,6 +35,18 @@ The secret scope must be named exactly **`prism-secrets`**.
 | `DATABRICKS_SQL_WAREHOUSE` | `your-warehouse-id` |
 | `DATABRICKS_SERVER_HOSTNAME` | *(optional — leave blank to auto-detect)* |
 
+> **App Identity (optional):** After deployment, open **Settings** in the app UI and fill in the App Identity section (owner name, title, email, team, company). These are stored in `prism_settings.json` and shown as a footer line in the chat UI. No environment variables or redeployment needed.
+
+The following environment variables are optional fallbacks for App Identity. The Settings UI takes priority over these if both are set:
+
+| Variable | Description |
+|---|---|
+| `PRISM_OWNER_NAME` | Owner display name |
+| `PRISM_OWNER_TITLE` | Owner job title |
+| `PRISM_OWNER_EMAIL` | Owner email address |
+| `PRISM_TEAM_NAME` | Team name |
+| `PRISM_COMPANY_NAME` | Company name |
+
 ### 3. Build the frontend
 
 ```bash
@@ -49,7 +61,7 @@ databricks apps deploy prism --source-code-path .
 
 The app URL is shown in the Databricks Apps UI once deployment completes.
 
-> **Other companies:** You can point the Databricks App UI directly at this repository's GitHub URL — no forking or copying the code is needed. Just complete steps 1–2 above in your own workspace, then deploy from the URL.
+> **Other companies:** You can point the Databricks App UI directly at this repository's GitHub URL — no forking or copying the code is needed. Just complete steps 1–2 above in your own workspace, then deploy from the URL. The landing page displays the Prism gradient brand logo (triangle SVG with gradient fill) and the product name "Prism".
 
 ---
 
@@ -127,6 +139,7 @@ prism/
 │   └── docker-publish.yml       # Publishes Docker image to GHCR on push/release
 ├── backend/
 │   ├── config.py                # AppConfig + secret masking helpers
+│   ├── settings_store.py        # Persistent app identity store (reads/writes prism_settings.json)
 │   ├── main.py                  # FastAPI app, startup lifecycle, middleware
 │   ├── api/
 │   │   ├── models.py            # Pydantic request/response models

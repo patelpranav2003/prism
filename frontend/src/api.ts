@@ -1,6 +1,8 @@
 // API client — thin wrappers over fetch for all /api/* endpoints
 
 import type {
+  AppIdentityData,
+  ConversationMessage,
   QueryResponse,
   SchemaModelDetail,
   SchemaModelSummary,
@@ -23,13 +25,14 @@ export async function fetchStatus(): Promise<StatusResponse> {
 
 export async function submitQuery(
   question: string,
+  history: ConversationMessage[] = [],
   rowLimit = 1000,
 ): Promise<QueryResponse> {
   return _json(
     await fetch(`${BASE}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, row_limit: rowLimit }),
+      body: JSON.stringify({ question, row_limit: rowLimit, history }),
     }),
   )
 }
@@ -48,6 +51,20 @@ export async function triggerRefresh(password: string): Promise<{ success: boole
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password }),
+    }),
+  )
+}
+
+export async function fetchAppIdentity(): Promise<AppIdentityData> {
+  return _json(await fetch(`${BASE}/settings/info`))
+}
+
+export async function saveAppIdentity(password: string, data: AppIdentityData): Promise<AppIdentityData> {
+  return _json(
+    await fetch(`${BASE}/settings/info`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password, ...data }),
     }),
   )
 }

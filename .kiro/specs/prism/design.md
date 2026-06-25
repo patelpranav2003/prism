@@ -130,7 +130,7 @@ class ManifestParser:
     def parse(self, raw: bytes) -> list[ModelMeta]
 ```
 
-- Extracts: `name`, `database`, `schema`, `alias` (actual materialized table name in Databricks — falls back to `name` when absent), `fqn` (constructed as `database.schema.alias`), columns (name + description), `meta.grain`, `compiled_sql[:500]`, `depends_on.nodes`, `tags`, folder path.
+- Extracts: `name`, `database`, `schema`, `alias` (actual materialized table name in Databricks — falls back to `name` when absent), `fqn` (constructed as `database.schema.alias`), columns (name + description), `meta.grain`, `compiled_sql` (full SQL stored), `depends_on.nodes`, `tags`, folder path.
 - Missing/null fields → zero value (empty string / empty list / 0) + WARN log.
 - Top-level JSON parse error → raises `ParseError`; caller (Index_Builder) handles it.
 
@@ -173,7 +173,7 @@ class IndexBuilder:
 3. Default → `bronze`.
 
 **Grain inference** when `meta.grain` is absent (Requirement 3.6):
-1. Scan `compiled_sql[:500]` for GROUP BY column list.
+1. Scan full `compiled_sql` for GROUP BY column list.
 2. Detect DISTINCT keyword.
 3. Check model name for `_by_{dimension}` suffix pattern.
 4. If none match → `"unknown"`.
@@ -241,9 +241,9 @@ class PromptBuilder:
 
 System prompt sections (Requirement 5.1, 5.2):
 1. **Preamble**: Role instruction, JSON response format, and model/grain selection guidance — Claude must state which table and grain was chosen and why; confidence is set to 'medium' when multiple models at different grains are equally plausible.
-2. **Schema block** per model: fully qualified name (using dbt alias), all columns (≤300) with types and descriptions, grain, layer, compiled SQL excerpt.
+2. **Schema block** per model: fully qualified name (using dbt alias), all columns (≤300) with types and descriptions, grain, layer, compiled SQL (first 1500 chars for LLM prompt; full SQL available for Schema Explorer).
 3. **Lineage block**: direct parent/child relationships; prefers graph_summary.json adjacency list, falls back to manifest `depends_on` when graph data is absent. Parents shown as "join candidates".
-4. **Dialect rules**: fully qualified `catalog.schema.table` names; backtick-quoted columns with special chars; `DATE_TRUNC` / `DATEADD` / `DATEDIFF`; `QUALIFY` for window filtering; default `LIMIT 1000`; no `SELECT *`; JOIN dimension tables on shared key columns rather than filtering on denormalized name columns in fact tables; always use `LOWER(column) LIKE '%keyword%'`, never exact equality.
+4. **Dialect rules**: fully qualified `catalog.schema.table` names; backtick-quoted columns with special chars; `DATE_TRUNC` / `DATEADD` / `DATEDIFF`; `QUALIFY` for window filtering; default `LIMIT 1000`; no `SELECT *`; JOIN dimension tables on shared key columns rather than filtering on denormalized name columns in fact tables; always use `LOWER(column) LIKE '%keyword%'`, never exact equality; every condition stated in the user's question must appear in every generated query — no condition may be dropped in intermediate or peek queries; match the temporal granularity of the question to the model's grain — if the question asks for daily data, use a daily-grain model rather than a weekly-grain model; filter `distributor_view` / `record_type` appropriately to avoid double-counting; for precise/specific questions return only what was explicitly asked with no auto-enrichment via additional JOINs, for exploratory questions additional context columns are permitted but unrequested JOINs are not.
 5. **Deduplication instruction**: injected when grain is `"unknown"` or no GROUP BY / DISTINCT / `_by_` pattern (Requirement 5.3). For aggregate queries (SUM, COUNT, AVG, etc.) ROW_NUMBER() deduplication is explicitly prohibited — it silently removes legitimate rows and corrupts totals.
 
 If a model has >300 columns, includes the first 300 and logs a WARNING (Requirement 15.3).
@@ -286,12 +286,14 @@ FastAPI router defining all HTTP endpoints.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/query` | Embed question → retrieve top-8 models → expand with `depends_on` parents → build prompt → generate SQL → execute |
+| `POST` | `/api/query` | Embed question → retrieve top-8 models → BFS expand across all ancestor levels (MAX_MODELS=40 cap); keyword enrichment adds all FQN-matching models with no cap → build prompt → generate SQL → execute |
 | `GET` | `/api/status` | Cache status, model count, last refresh |
 | `POST` | `/api/refresh` | Admin: trigger manual refresh |
 | `POST` | `/api/auth` | Admin: validate password |
 | `GET` | `/api/schema` | Full model list for Schema_Explorer |
 | `GET` | `/api/schema/{model}` | Detail panel data for one model |
+| `GET` | `/api/settings/info` | Public: return current app identity (settings store → env var fallback) |
+| `POST` | `/api/settings/info` | Admin: persist app identity to `prism_settings.json` (requires password) |
 
 All endpoints include correlation ID injection via FastAPI middleware. Error responses follow a consistent `{"error": "...", "correlation_id": "..."}` shape.
 
@@ -324,6 +326,26 @@ class StatusResponse(BaseModel):
     cache_status: Literal["fresh", "stale", "unavailable"]
     last_refresh_utc: datetime | None
     model_count: int
+    owner_name: str = ""
+    owner_title: str = ""
+    owner_email: str = ""
+    team_name: str = ""
+    company_name: str = ""
+
+class AppIdentityResponse(BaseModel):
+    owner_name: str
+    owner_title: str
+    owner_email: str
+    team_name: str
+    company_name: str
+
+class AppIdentityRequest(BaseModel):
+    owner_name: str = ""
+    owner_title: str = ""
+    owner_email: str = ""
+    team_name: str = ""
+    company_name: str = ""
+    password: str
 
 class RefreshResponse(BaseModel):
     success: bool
@@ -331,22 +353,37 @@ class RefreshResponse(BaseModel):
     error: str | None
 ```
 
+### 13b. `backend/settings_store.py` — SettingsStore
+
+Persistent key-value store for app identity configuration.
+
+```python
+class SettingsStore:
+    def load(self) -> AppIdentity
+    def save(self, identity: AppIdentity) -> None
+```
+
+- Reads and writes `prism_settings.json` in the project root directory.
+- Values set here take priority over env var equivalents (`PRISM_OWNER_*`, `PRISM_TEAM_NAME`, `PRISM_COMPANY_NAME`).
+- Called on every `/api/status` and `/api/settings/info` request — no in-memory caching (admin writes are rare).
+- On missing file: returns `AppIdentity()` with all empty strings (no error).
+
 ### 14. Frontend Components
 
 All React components live under `frontend/src/`.
 
 | Component | Role |
 |---|---|
-| `SearchBar` | Main question input + submit; chip example questions |
+| `SearchBar` | Main question input + submit; dynamic example question chips generated from gold models (grouped by domain prefix, shuffled per page load, fixed per session) |
 | `ResultsTable` | Sortable table; Download CSV; streaming row display |
 | `SQLViewer` | Syntax-highlighted SQL; copy-to-clipboard |
 | `ExplanationPanel` | Collapsible "How I answered this"; models_used tags |
-| `SchemaExplorer` | Sidebar; Gold/Silver/Bronze sections; search; detail panel |
+| `SchemaExplorer` | Sidebar; Gold/Silver/Bronze sections; search; detail panel; horizontally resizable sidebar (220–640 px) and detail panel (300–860 px); model list scrolls internally with pinned header/search/footer |
 | `ConfidenceIndicator` | Green / Amber / Red badge |
 | `SchemaHealthBar` | Landing page status: model count, last refresh, stale/unavailable warning |
-| `Pages/Home` | Landing page layout |
+| `Pages/Home` | Landing page layout; Prism gradient brand logo (triangle SVG with gradient fill) and "Prism" brand text; dynamic gold-model-based question chips; identity footer line (shown when at least one identity field is set); resizable Schema Explorer sidebar |
 | `Pages/Results` | Results page layout |
-| `Pages/Settings` | Admin settings (password gated) |
+| `Pages/Settings` | Admin settings (password gated); App Identity section with 5 configurable fields (owner name, title, email, team, company) |
 
 Frontend communicates with the backend exclusively through the `/api/*` REST endpoints using `fetch` / `EventSource` for streaming rows.
 
@@ -372,7 +409,7 @@ class ModelMeta:
     columns: list[ColumnMeta]
     grain: str           # "unknown" if not determinable
     layer: Literal["bronze", "silver", "gold"]
-    compiled_sql_excerpt: str   # first 500 chars
+    compiled_sql_excerpt: str   # full compiled SQL
     depends_on: list[str]       # direct parent model names
     tags: list[str]
     folder_path: str
@@ -471,6 +508,14 @@ class AppConfig:
     default_row_limit: int = 1000
     refresh_interval_hours: int = 6
     retry_interval_minutes: int = 5
+
+    # App Identity — optional; loaded from PRISM_* env vars as fallback.
+    # Values set via the Settings UI (SettingsStore / prism_settings.json) take priority.
+    owner_name: str = ""       # PRISM_OWNER_NAME
+    owner_title: str = ""      # PRISM_OWNER_TITLE
+    owner_email: str = ""      # PRISM_OWNER_EMAIL
+    team_name: str = ""        # PRISM_TEAM_NAME
+    company_name: str = ""     # PRISM_COMPANY_NAME
 ```
 
 `AppConfig.from_env()` calls `python-dotenv`'s `load_dotenv()` as its first action. When running locally (Docker or plain Python), this loads variables from a `.env` file automatically. In Databricks Apps production, no `.env` file exists and `load_dotenv()` is a silent no-op — secrets have already been injected by the runtime from the `prism-secrets` secret scope.

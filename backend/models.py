@@ -45,7 +45,7 @@ class ModelMeta:
         columns: Ordered list of column metadata.
         grain: Unique key / granularity; ``"unknown"`` when not determinable.
         layer: Medallion tier inferred from tags or folder path.
-        compiled_sql_excerpt: First 500 characters of the model's compiled SQL.
+        compiled_sql_excerpt: Full compiled SQL for the model (from manifest compiled_code/compiled_sql).
         depends_on: Direct parent model names from ``depends_on.nodes``.
         tags: dbt tags attached to the model.
         folder_path: Relative folder path inside the dbt project.
@@ -61,7 +61,7 @@ class ModelMeta:
     columns: list[ColumnMeta]
     grain: str           # "unknown" if not determinable
     layer: Literal["bronze", "silver", "gold"]
-    compiled_sql_excerpt: str   # first 500 chars
+    compiled_sql_excerpt: str   # full compiled SQL
     depends_on: list[str]       # direct parent model names
     tags: list[str]
     folder_path: str
