@@ -6,6 +6,7 @@
 .env
 .env.*
 !.env.example
+prism_settings.json
 
 # --- Python ---
 __pycache__/
