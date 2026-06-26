@@ -38,7 +38,7 @@ jobs:
           git remote add public https://x-access-token:${{ secrets.PUBLIC_REPO_TOKEN }}@github.com/${{ secrets.PUBLIC_REPO_NAME }}.git
           git push public HEAD:dev --force
 
-      - name: Merge public dev into public main
+      - name: Merge public dev into public main and sync back to dev
         run: |
           git clone https://x-access-token:${{ secrets.PUBLIC_REPO_TOKEN }}@github.com/${{ secrets.PUBLIC_REPO_NAME }}.git /tmp/public-repo
           cd /tmp/public-repo
@@ -52,3 +52,4 @@ jobs:
             git checkout -b main origin/dev
           fi
           git push origin main
+          git push origin main:dev --force
