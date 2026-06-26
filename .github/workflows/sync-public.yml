@@ -1,6 +1,8 @@
-# Syncs private main to the public repo in two steps:
-#   1. Push stripped private main → public dev
-#   2. Merge public dev → public main
+# Syncs private branches to the public repo (private files stripped):
+#   - private main → public main
+#   - private dev  → public dev
+#
+# Triggers automatically on push to main or dev, and can be run manually.
 #
 # Required secrets in the private repo settings:
 #   PUBLIC_REPO_TOKEN  — GitHub PAT with write access to the public repo
@@ -9,10 +11,12 @@
 name: Sync to Public Repo
 
 on:
+  push:
+    branches: [main, dev]
   workflow_dispatch:
 
 jobs:
-  sync:
+  sync-main:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,22 +37,33 @@ jobs:
           git add -A
           git diff --staged --quiet || git commit -m "sync: strip private files"
 
-      - name: Push to public dev branch
+      - name: Push to public main
+        run: |
+          git remote add public https://x-access-token:${{ secrets.PUBLIC_REPO_TOKEN }}@github.com/${{ secrets.PUBLIC_REPO_NAME }}.git
+          git push public HEAD:main --force
+
+  sync-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Strip private files
+        run: |
+          rm -rf .kiro .claude private
+          rm -f .github/workflows/sync-public.yml
+
+      - name: Commit stripped version
+        run: |
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add -A
+          git diff --staged --quiet || git commit -m "sync: strip private files"
+
+      - name: Push to public dev
         run: |
           git remote add public https://x-access-token:${{ secrets.PUBLIC_REPO_TOKEN }}@github.com/${{ secrets.PUBLIC_REPO_NAME }}.git
           git push public HEAD:dev --force
-
-      - name: Merge public dev into public main
-        run: |
-          git clone https://x-access-token:${{ secrets.PUBLIC_REPO_TOKEN }}@github.com/${{ secrets.PUBLIC_REPO_NAME }}.git /tmp/public-repo
-          cd /tmp/public-repo
-          git config user.email "github-actions@github.com"
-          git config user.name "GitHub Actions"
-          git fetch origin
-          if git show-ref --quiet refs/remotes/origin/main; then
-            git checkout main
-            git merge origin/dev --no-ff -m "sync: merge dev into main"
-          else
-            git checkout -b main origin/dev
-          fi
-          git push origin main
