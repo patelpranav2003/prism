@@ -91,6 +91,9 @@ Databricks Apps runtime            (production)
   └─ uvicorn backend.main:app --host 0.0.0.0 --port 8000
        ├─ /api/*   → FastAPI routes  (Python)
        └─ /*       → React SPA       (static files from frontend/dist/)
+                       ├─ /       → Chat page  (default — opens on first load)
+                       ├─ /admin  → Settings page (password gated; app identity, refresh)
+                       └─ *       → redirect to /  (prevents platform path conflicts)
 
 Docker container                   (local dev / evaluation)
   └─ same uvicorn command, same process
@@ -383,7 +386,7 @@ All React components live under `frontend/src/`.
 | `SchemaHealthBar` | Landing page status: model count, last refresh, stale/unavailable warning |
 | `Pages/Home` | Landing page layout; Prism gradient brand logo (triangle SVG with gradient fill) and "Prism" brand text; dynamic gold-model-based question chips; identity footer line (shown when at least one identity field is set); resizable Schema Explorer sidebar |
 | `Pages/Results` | Results page layout |
-| `Pages/Settings` | Admin settings (password gated); App Identity section with 5 configurable fields (owner name, title, email, team, company) |
+| `Pages/Settings` | Admin settings at `/admin` (password gated); App Identity section with 5 configurable fields (owner name, title, email, team, company); not shown on first load — app always opens at Chat |
 
 Frontend communicates with the backend exclusively through the `/api/*` REST endpoints using `fetch` / `EventSource` for streaming rows.
 

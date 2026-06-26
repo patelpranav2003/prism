@@ -35,7 +35,7 @@ The secret scope must be named exactly **`prism-secrets`**.
 | `DATABRICKS_SQL_WAREHOUSE` | `your-warehouse-id` |
 | `DATABRICKS_SERVER_HOSTNAME` | *(optional — leave blank to auto-detect)* |
 
-> **App Identity (optional):** After deployment, open **Settings** in the app UI and fill in the App Identity section (owner name, title, email, team, company). These are stored in `prism_settings.json` and shown as a footer line in the chat UI. No environment variables or redeployment needed.
+> **App Identity (optional):** After deployment, navigate to **`/admin`** in the app and fill in the App Identity section (owner name, title, email, team, company). These are stored in `prism_settings.json` and shown as a footer line in the chat UI. This step is entirely optional — the app opens directly to the chat page on first load and works without it. No environment variables or redeployment needed.
 
 The following environment variables are optional fallbacks for App Identity. The Settings UI takes priority over these if both are set:
 

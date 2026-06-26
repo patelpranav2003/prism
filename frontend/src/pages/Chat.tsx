@@ -202,7 +202,7 @@ export default function Chat() {
             >
               {showExplorer ? 'Hide Schema' : 'Schema'}
             </button>
-            <a href="/settings" className="icon-btn" aria-label="Settings">Settings</a>
+            <a href="/admin" className="icon-btn" aria-label="Settings">Settings</a>
           </div>
         </header>
 

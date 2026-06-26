@@ -369,6 +369,15 @@ Implement Prism as a Databricks App with a Python/FastAPI backend and a React/Ty
   - [x] 30.6 Display identity as a subtle muted footer line at bottom of chat page: Name · Title · email · Team · Company (only when at least one field is set; hidden once a conversation starts... actually always visible at bottom)
   - _Requirements: 10.7 (new)_
 
+- [x] 31. Settings page URL change — `/settings` → `/admin` with catch-all redirect
+  - [x] 31.1 Rename React Router route from `/settings` to `/admin` in `frontend/src/App.tsx`
+    - Add `<Route path="*" element={<Navigate to="/" replace />} />` catch-all so unmatched paths (including the Databricks-platform-reserved `/settings`) redirect to Chat
+    - Import `Navigate` from `react-router-dom`
+    - Prevents Databricks Apps platform from matching its internal `/settings` path against the app's React route and loading the Settings page on first access
+    - _Requirements: 10.1_
+  - [x] 31.2 Update all frontend links from `/settings` to `/admin` (`Chat.tsx`, `Home.tsx`)
+    - _Requirements: 10.1_
+
 - [ ] 27. Email-based admin authentication (future)
   - Replace bcrypt `ADMIN_PASSWORD_HASH` gate in `POST /api/auth` with `X-Forwarded-Email` header validation
   - Add `ADMIN_ALLOWED_EMAILS` env var (comma-separated) to `AppConfig`; set in Databricks App UI

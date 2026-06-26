@@ -100,7 +100,7 @@ export default function Home() {
       </main>
 
       <nav className="home-nav">
-        <a href="/settings" aria-label="Settings">Settings</a>
+        <a href="/admin" aria-label="Settings">Settings</a>
       </nav>
     </div>
   )
