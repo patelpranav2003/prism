@@ -126,16 +126,18 @@ class ArtifactFetcher:
 
 ### 2. `discovery/manifest_parser.py` — ManifestParser
 
-Parses `manifest.json` and extracts per-model metadata.
+Parses `manifest.json` and extracts per-model metadata and join hints.
 
 ```python
 class ManifestParser:
     def parse(self, raw: bytes) -> list[ModelMeta]
+    def parse_join_hints(self, raw: bytes) -> list[JoinHint]
 ```
 
-- Extracts: `name`, `database`, `schema`, `alias` (actual materialized table name in Databricks — falls back to `name` when absent), `fqn` (constructed as `database.schema.alias`), columns (name + description), `meta.grain`, `compiled_sql` (full SQL stored), `depends_on.nodes`, `tags`, folder path.
+- `parse()`: Extracts `name`, `database`, `schema`, `alias` (actual materialized table name in Databricks — falls back to `name` when absent), `fqn` (constructed as `database.schema.alias`), columns (name + description), `meta.grain`, `compiled_sql` (full SQL stored), `depends_on.nodes`, `tags`, folder path.
+- `parse_join_hints()`: Scans the same `manifest.json` for test nodes where `test_metadata.name == "relationships"` and extracts FK→PK column pairs: `from_model` (FK model), `from_col` (FK column), `to_model` (PK model), `to_col` (PK column). Unwraps `ref('model_name')` and `{{ ref('model_name') }}` Jinja expressions via regex. Deduplicates via a `seen: set[tuple]`. Returns an empty list (never raises) on parse failure. Logs the count of extracted hints.
 - Missing/null fields → zero value (empty string / empty list / 0) + WARN log.
-- Top-level JSON parse error → raises `ParseError`; caller (Index_Builder) handles it.
+- Top-level JSON parse error → raises `ParseError` (in `parse()` only); caller (Index_Builder) handles it.
 
 ### 3. `discovery/catalog_parser.py` — CatalogParser
 
@@ -169,6 +171,15 @@ Orchestrates parsing, merging, layer inference, grain inference, and embedding g
 class IndexBuilder:
     def build(self, bundle: ArtifactBundle) -> SchemaIndex
 ```
+
+**Build pipeline** (in order):
+1. `ManifestParser.parse()` → `list[ModelMeta]`
+2. `ManifestParser.parse_join_hints()` → `list[JoinHint]` (same manifest bytes; never raises)
+3. `CatalogParser.merge()` → column types + row counts merged into models
+4. `GraphParser.parse()` → lineage adjacency dict
+5. `_infer_layer()` applied to every model
+6. `_infer_grain()` applied to every model whose grain is empty
+7. `SchemaIndex` constructed with `join_hints=join_hints`
 
 **Layer inference** (priority order per Requirement 3.3):
 1. Tag contains `gold` / `silver` / `bronze` (case-insensitive).
@@ -246,8 +257,9 @@ System prompt sections (Requirement 5.1, 5.2):
 1. **Preamble**: Role instruction, JSON response format, and model/grain selection guidance — Claude must state which table and grain was chosen and why; confidence is set to 'medium' when multiple models at different grains are equally plausible.
 2. **Schema block** per model: fully qualified name (using dbt alias), all columns (≤300) with types and descriptions, grain, layer, compiled SQL (first 1500 chars for LLM prompt; full SQL available for Schema Explorer).
 3. **Lineage block**: direct parent/child relationships; prefers graph_summary.json adjacency list, falls back to manifest `depends_on` when graph data is absent. Parents shown as "join candidates".
-4. **Dialect rules**: fully qualified `catalog.schema.table` names; backtick-quoted columns with special chars; `DATE_TRUNC` / `DATEADD` / `DATEDIFF`; `QUALIFY` for window filtering; default `LIMIT 1000`; no `SELECT *`; JOIN dimension tables on shared key columns rather than filtering on denormalized name columns in fact tables; always use `LOWER(column) LIKE '%keyword%'`, never exact equality; every condition stated in the user's question must appear in every generated query — no condition may be dropped in intermediate or peek queries; match the temporal granularity of the question to the model's grain — if the question asks for daily data, use a daily-grain model rather than a weekly-grain model; filter `distributor_view` / `record_type` appropriately to avoid double-counting; for precise/specific questions return only what was explicitly asked with no auto-enrichment via additional JOINs, for exploratory questions additional context columns are permitted but unrequested JOINs are not.
-5. **Deduplication instruction**: injected when grain is `"unknown"` or no GROUP BY / DISTINCT / `_by_` pattern (Requirement 5.3). For aggregate queries (SUM, COUNT, AVG, etc.) ROW_NUMBER() deduplication is explicitly prohibited — it silently removes legitimate rows and corrupts totals.
+4. **Join Keys block** (when join hints are available): explicit FK→PK column pairs extracted from dbt `relationships` tests, rendered as `from_fqn.col -> to_fqn.col`. Claude is instructed to use these exact columns when joining — never guess join keys. Injected by `_join_hints_block()` which filters `SchemaIndex.join_hints` for hints where `from_model` is in the selected model set and resolves FQNs from the full index. Fallback: when no relationship tests exist for the selected models, shared `_id`/`_key` columns appearing in exactly two selected models are shown as potential join candidates (`## Potential Join Columns`).
+5. **Dialect rules**: fully qualified `catalog.schema.table` names; backtick-quoted columns with special chars; `DATE_TRUNC` / `DATEADD` / `DATEDIFF`; `QUALIFY` for window filtering; default `LIMIT 1000`; no `SELECT *`; JOIN dimension tables on shared key columns rather than filtering on denormalized name columns in fact tables; always use `LOWER(column) LIKE '%keyword%'`, never exact equality; every condition stated in the user's question must appear in every generated query — no condition may be dropped in intermediate or peek queries; match the temporal granularity of the question to the model's grain — if the question asks for daily data, use a daily-grain model rather than a weekly-grain model; filter `distributor_view` / `record_type` appropriately to avoid double-counting; for precise/specific questions return only what was explicitly asked with no auto-enrichment via additional JOINs, for exploratory questions additional context columns are permitted but unrequested JOINs are not.
+6. **Deduplication instruction**: injected when grain is `"unknown"` or no GROUP BY / DISTINCT / `_by_` pattern (Requirement 5.3). For aggregate queries (SUM, COUNT, AVG, etc.) ROW_NUMBER() deduplication is explicitly prohibited — it silently removes legitimate rows and corrupts totals.
 
 If a model has >300 columns, includes the first 300 and logs a WARNING (Requirement 15.3).
 
@@ -260,7 +272,7 @@ class SQLGenerator:
     async def generate(self, system_prompt: str, question: str) -> SQLResult | GenerationError
 ```
 
-- Model: `claude-sonnet-4-6`, `max_tokens=2000`.
+- Model: `claude-sonnet-4-6`, `max_tokens=4096`.
 - Required JSON fields: `sql`, `explanation`, `models_used`, `confidence`, `confidence_reason`.
 - On non-200, timeout (30s), or invalid JSON: returns `GenerationError` with user-facing message "Unable to generate SQL — please try rephrasing your question."
 - Logs: question[:500], selected model names, Claude model ID, token count, outcome.
@@ -421,6 +433,19 @@ class ModelMeta:
     description: str            # model-level description from manifest
 ```
 
+### `JoinHint` — FK→PK relationship from a dbt relationship test
+
+```python
+@dataclass
+class JoinHint:
+    from_model: str   # dbt model name that holds the FK column
+    from_col: str     # FK column name in from_model
+    to_model: str     # dbt model name that holds the PK column
+    to_col: str       # PK column name in to_model
+```
+
+Extracted by `ManifestParser.parse_join_hints()` from `test.*` nodes in manifest.json where `test_metadata.name == "relationships"`. Stored in `SchemaIndex.join_hints` and consumed by `PromptBuilder._join_hints_block()`.
+
 ### `SchemaIndex` — top-level in-memory index
 
 ```python
@@ -431,6 +456,7 @@ class SchemaIndex:
     lineage: dict[str, LineageNode]          # model_name → {parents, children}
     built_at: datetime
     model_count: int
+    join_hints: list[JoinHint] = field(default_factory=list)  # FK→PK from relationship tests
 ```
 
 ### `LineageNode`

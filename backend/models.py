@@ -75,6 +75,23 @@ class ModelMeta:
 # ---------------------------------------------------------------------------
 
 @dataclass
+class JoinHint:
+    """A FK→PK join relationship extracted from a dbt relationship test.
+
+    Attributes:
+        from_model: dbt model name that holds the FK column.
+        from_col:   FK column name in from_model.
+        to_model:   dbt model name that holds the PK column.
+        to_col:     PK column name in to_model.
+    """
+
+    from_model: str
+    from_col: str
+    to_model: str
+    to_col: str
+
+
+@dataclass
 class LineageNode:
     """Adjacency entry for one model in the lineage graph.
 
@@ -113,6 +130,7 @@ class SchemaIndex:
     lineage: dict[str, LineageNode]          # model_name → {parents, children}
     built_at: datetime
     model_count: int
+    join_hints: list[JoinHint] = field(default_factory=list)  # FK→PK from relationship tests
 
 
 @dataclass

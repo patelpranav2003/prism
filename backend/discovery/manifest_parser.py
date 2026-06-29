@@ -20,10 +20,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any
 
+_REF_RE = re.compile(r"ref\s*\(\s*['\"]([^'\"]+)['\"]\s*\)")
+
 from backend.exceptions import ParseError
-from backend.models import ColumnMeta, ModelMeta
+from backend.models import ColumnMeta, JoinHint, ModelMeta
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +88,75 @@ class ManifestParser:
         logger.info("ManifestParser: parsed %d model(s) from manifest.json", len(models))
         return models
 
+    def parse_join_hints(self, raw: bytes) -> list[JoinHint]:
+        """Extract FK→PK join hints from dbt ``relationships`` test nodes.
+
+        Scans the same manifest.json for test nodes where
+        ``test_metadata.name == "relationships"`` and extracts:
+          - from_model / from_col  (the model+column holding the FK)
+          - to_model   / to_col    (the referenced model+column holding the PK)
+
+        Returns an empty list (never raises) if the manifest cannot be parsed
+        or contains no relationship tests.
+        """
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return []
+
+        if not isinstance(data, dict):
+            return []
+
+        nodes = data.get("nodes", {})
+        if not isinstance(nodes, dict):
+            return []
+
+        hints: list[JoinHint] = []
+        seen: set[tuple[str, str, str, str]] = set()
+
+        for node_key, node in nodes.items():
+            if not node_key.startswith("test.") or not isinstance(node, dict):
+                continue
+
+            test_meta = node.get("test_metadata")
+            if not isinstance(test_meta, dict) or test_meta.get("name") != "relationships":
+                continue
+
+            kwargs = test_meta.get("kwargs")
+            if not isinstance(kwargs, dict):
+                continue
+
+            from_model = self._ref_name(str(kwargs.get("model", "")))
+            from_col = str(kwargs.get("column_name", "")).strip()
+            to_model = self._ref_name(str(kwargs.get("to", "")))
+            to_col = str(kwargs.get("field", "")).strip()
+
+            if not (from_model and from_col and to_model and to_col):
+                continue
+
+            key = (from_model, from_col, to_model, to_col)
+            if key in seen:
+                continue
+            seen.add(key)
+            hints.append(JoinHint(from_model=from_model, from_col=from_col,
+                                   to_model=to_model, to_col=to_col))
+
+        logger.info("ManifestParser: extracted %d join hint(s) from relationship tests", len(hints))
+        return hints
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _ref_name(ref_str: str) -> str:
+        """Extract the model name from a dbt ref() expression.
+
+        Handles both ``ref('name')`` and ``{{ ref('name') }}`` forms.
+        Returns '' when no match is found.
+        """
+        m = _REF_RE.search(ref_str)
+        return m.group(1) if m else ""
 
     def _parse_node(self, node_key: str, node: Any) -> ModelMeta | None:
         """Convert a single manifest node dict into a ModelMeta.

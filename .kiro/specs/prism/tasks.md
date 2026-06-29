@@ -378,6 +378,22 @@ Implement Prism as a Databricks App with a Python/FastAPI backend and a React/Ty
   - [x] 31.2 Update all frontend links from `/settings` to `/admin` (`Chat.tsx`, `Home.tsx`)
     - _Requirements: 10.1_
 
+- [x] 32. Fix join key accuracy — FK→PK hints from dbt relationship tests
+  - Root problem: Claude was guessing join columns for multi-table queries because the lineage block only named parent models, not which columns to join on; `graph_summary.json` had no `nodes` key so lineage was empty and fell back to `depends_on` names only.
+  - Solution: parse dbt `relationships` test nodes from the already-fetched manifest.json, extract explicit FK→PK column pairs, and inject them as a `## Join Keys` section in every Claude prompt.
+  - [x] 32.1 Add `JoinHint` dataclass to `backend/models.py` (fields: `from_model`, `from_col`, `to_model`, `to_col`); add `join_hints: list[JoinHint]` field to `SchemaIndex` with `default_factory=list`
+  - [x] 32.2 Add `parse_join_hints(self, raw: bytes) -> list[JoinHint]` to `ManifestParser` (`backend/discovery/manifest_parser.py`): iterates `test.*` nodes, filters for `test_metadata.name == "relationships"`, extracts FK/PK fields, unwraps `ref('name')` Jinja expressions via `_REF_RE` regex, deduplicates, logs extracted count.
+  - [x] 32.3 In `IndexBuilder.build()` (`backend/discovery/index_builder.py`): call `parse_join_hints()` immediately after `parse()` (Step 1) and pass `join_hints=join_hints` to the `SchemaIndex` constructor.
+  - [x] 32.4 Add `_join_hints_block()` to `PromptBuilder` (`backend/generation/prompt_builder.py`): primary path filters `SchemaIndex.join_hints` for hints where `from_model` is in selected models and renders `## Join Keys` section; fallback detects shared `_id`/`_key` columns across exactly two selected models (`## Potential Join Columns`). Called in `build()` after `_lineage_block()`.
+  - Result confirmed: `ManifestParser: extracted 59 join hint(s) from relationship tests` — 59 explicit FK→PK pairs injected into every prompt.
+  - _Requirements: 3.9, 5.1_
+
+- [x] 33. Increase max_tokens from 2000 to 4096
+  - Changed `_MAX_TOKENS = 2000` → `_MAX_TOKENS = 4096` in `backend/generation/sql_generator.py`.
+  - Reason: complex multi-join queries with verbose explanations were silently truncated mid-JSON at 2000 tokens, causing JSON parse failures.
+  - 4096 tokens is the safe ceiling for `claude-sonnet-4-6` on this use case; well within model limits.
+  - _Requirements: 5.4_
+
 - [ ] 27. Email-based admin authentication (future)
   - Replace bcrypt `ADMIN_PASSWORD_HASH` gate in `POST /api/auth` with `X-Forwarded-Email` header validation
   - Add `ADMIN_ALLOWED_EMAILS` env var (comma-separated) to `AppConfig`; set in Databricks App UI

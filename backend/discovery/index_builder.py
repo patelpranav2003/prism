@@ -194,6 +194,8 @@ class IndexBuilder:
             )
             return previous_index
 
+        join_hints = self._manifest_parser.parse_join_hints(bundle.manifest)
+
         # --- Step 2: CatalogParser (merge) ---
         try:
             models = self._catalog_parser.merge(models, bundle.catalog)
@@ -239,6 +241,7 @@ class IndexBuilder:
             models=enriched,
             embeddings=empty_embeddings,
             lineage=lineage,
+            join_hints=join_hints,
             built_at=datetime.now(tz=timezone.utc),
             model_count=len(enriched),
         )

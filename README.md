@@ -2,6 +2,15 @@
 
 Prism lets business users ask plain-English questions about their data and receive real SQL-backed answers — no SQL knowledge required. It auto-discovers dbt schemas from GitLab CI artifacts, uses Claude to generate SQL, and executes queries against a Databricks SQL warehouse.
 
+### How it achieves accuracy
+
+Prism uses several techniques to ensure correct SQL — especially for multi-table questions from non-technical users:
+
+- **Explicit join keys from dbt relationship tests** — Prism parses all `relationships` test nodes in `manifest.json` and extracts FK→PK column pairs. On every query, these are injected into the Claude prompt as a `## Join Keys` section so Claude never guesses which columns to join on. A fallback detects shared `_id`/`_key` columns across exactly two selected models when no relationship tests are defined.
+- **BFS lineage expansion** — After semantic retrieval, Prism walks `depends_on` ancestors across all levels (capped at 40 models) to ensure dimension and lookup tables are always present as join candidates.
+- **4096-token output budget** — The LLM response cap is set to 4096 tokens to prevent silent JSON truncation on complex multi-join queries with verbose explanations.
+- **Full compiled SQL in context** — The full compiled SQL for each model is stored and shown to Claude (first 1500 chars in the prompt), giving it accurate grain, filter, and join pattern hints.
+
 ---
 
 ## Deploy to Databricks Apps
