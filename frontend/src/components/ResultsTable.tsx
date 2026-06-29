@@ -1,5 +1,7 @@
 import { useState } from 'react'
 
+const TABLE_PREVIEW_LIMIT = 100
+
 interface Props {
   rows: Record<string, unknown>[]
   rowCount: number
@@ -62,10 +64,17 @@ export default function ResultsTable({ rows, rowCount, executionTimeMs, warehous
       })
     : rows
 
+  const displayRows = sortedRows.slice(0, TABLE_PREVIEW_LIMIT)
+  const truncated = rows.length > TABLE_PREVIEW_LIMIT
+
   return (
     <div className="results-table-container">
       <div className="results-meta" aria-live="polite">
-        <span>{rowCount} row{rowCount !== 1 ? 's' : ''}</span>
+        <span>
+          {truncated
+            ? `Showing ${TABLE_PREVIEW_LIMIT} of ${rowCount.toLocaleString()} rows`
+            : `${rowCount} row${rowCount !== 1 ? 's' : ''}`}
+        </span>
         <span>·</span>
         <span>{executionTimeMs}ms</span>
         {warehouseName && <><span>·</span><span>{warehouseName}</span></>}
@@ -73,9 +82,9 @@ export default function ResultsTable({ rows, rowCount, executionTimeMs, warehous
           type="button"
           onClick={() => downloadCSV(rows)}
           className="csv-btn"
-          aria-label="Download results as CSV"
+          aria-label="Download all results as CSV"
         >
-          Download CSV
+          {truncated ? `Download all ${rowCount.toLocaleString()} rows` : 'Download CSV'}
         </button>
       </div>
 
@@ -105,7 +114,7 @@ export default function ResultsTable({ rows, rowCount, executionTimeMs, warehous
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map((row, i) => (
+            {displayRows.map((row, i) => (
               <tr key={i}>
                 {columns.map(col => (
                   <td key={col}>{row[col] === null || row[col] === undefined ? '' : String(row[col])}</td>
@@ -115,6 +124,12 @@ export default function ResultsTable({ rows, rowCount, executionTimeMs, warehous
           </tbody>
         </table>
       </div>
+
+      {truncated && (
+        <p className="table-truncation-note">
+          Showing first {TABLE_PREVIEW_LIMIT} rows — download CSV for the full result set.
+        </p>
+      )}
     </div>
   )
 }

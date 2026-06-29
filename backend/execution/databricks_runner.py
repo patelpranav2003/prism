@@ -3,16 +3,21 @@ backend/execution/databricks_runner.py
 
 QueryRunner — executes generated SQL against a Databricks SQL warehouse,
 enforces the row limit, guards against DDL/DML statements, and auto-retries
-once on warehouse error by asking the SQLGenerator for a corrected query.
+up to twice on warehouse error by asking the SQLGenerator for a corrected query.
 
 Design decisions:
 - Uses ``databricks-sql-connector`` with workspace OAuth.
 - DDL/DML guard runs BEFORE any network call (Requirement 11.5).
 - Row limit is enforced by injecting ``LIMIT {row_limit}`` when no LIMIT
   clause is detected in the SQL (Requirement 6.4).
-- Auto-retry: on first warehouse SQL error, calls ``SQLGenerator.generate()``
-  with the original question + failed SQL + error message; double failure
-  surfaces a safe non-technical error (Requirements 6.6–6.8).
+- Auto-retry (up to 2 attempts):
+    Attempt 1 — classifies the Databricks error type (column not found,
+    type mismatch, ambiguous column, syntax error, etc.) and injects a
+    targeted fix instruction into the retry prompt so the model knows
+    exactly what kind of mistake to fix.
+    Attempt 2 — if attempt 1 also fails, sends both error messages and
+    both failed SQL strings so the model has the full failure context.
+    A double failure surfaces a safe non-technical error (Req 6.6–6.8).
 - Fallback to workspace default warehouse if the configured warehouse ID is
   invalid (Requirement 14.4).
 
@@ -51,6 +56,72 @@ _SAFE_ERROR_MESSAGE = (
 
 # Type alias for a result row
 ResultRow = dict[str, object]
+
+
+# ---------------------------------------------------------------------------
+# Error classification for targeted retry prompts
+# ---------------------------------------------------------------------------
+
+def _classify_error(error_msg: str) -> str:
+    """Return a short error-type key from a Databricks SQL error message."""
+    msg = error_msg.lower()
+    if any(k in msg for k in ("cannot resolve", "column_not_found", "unresolved column", "no such struct field")):
+        return "column_not_found"
+    if any(k in msg for k in ("table_or_view_not_found", "table or view not found", "nosuchnamespaceexception")):
+        return "table_not_found"
+    if any(k in msg for k in ("datatype_mismatch", "cannot cast", "type mismatch", "type error", "incompatible types")):
+        return "type_mismatch"
+    if any(k in msg for k in ("ambiguous", "ambiguous_column_or_field", "reference is ambiguous")):
+        return "ambiguous_column"
+    if any(k in msg for k in ("parse_syntax_error", "syntax error", "mismatched input", "extraneous input", "no viable alternative")):
+        return "syntax_error"
+    if any(k in msg for k in ("division by zero", "divide by zero", "division_by_zero")):
+        return "division_by_zero"
+    return "generic"
+
+
+_RETRY_INSTRUCTIONS: dict[str, str] = {
+    "column_not_found": (
+        "ERROR TYPE: COLUMN NOT FOUND.\n"
+        "Fix: check each column name against the schema — it is likely misspelled, belongs to "
+        "the wrong table, or requires a JOIN that is missing. Use ONLY column names listed in "
+        "the schema blocks. Do not change the query logic — fix only the column references."
+    ),
+    "table_not_found": (
+        "ERROR TYPE: TABLE OR VIEW NOT FOUND.\n"
+        "Fix: use the EXACT fully qualified name `catalog.schema.table` shown in the schema. "
+        "Use the dbt alias (the table name as it appears in the schema block header), not the "
+        "dbt model name. Do not invent table names — only use tables listed in the schema."
+    ),
+    "type_mismatch": (
+        "ERROR TYPE: TYPE MISMATCH.\n"
+        "Fix: a column or literal is being compared to or cast into an incompatible type. "
+        "Use explicit CAST(column AS type) where needed. Do not compare a string column to "
+        "an integer literal — quote it. For dates use TO_DATE() or CAST(col AS DATE)."
+    ),
+    "ambiguous_column": (
+        "ERROR TYPE: AMBIGUOUS COLUMN.\n"
+        "Fix: a column name exists in more than one joined table. Qualify EVERY column reference "
+        "with its table alias (e.g. `t1.brand_id`, not just `brand_id`). Apply this to all "
+        "columns in SELECT, WHERE, JOIN ON, GROUP BY, and ORDER BY."
+    ),
+    "syntax_error": (
+        "ERROR TYPE: SQL SYNTAX ERROR.\n"
+        "Fix: check that (1) all parentheses are balanced, (2) there are no trailing commas "
+        "before FROM or GROUP BY, (3) every subquery has an alias, (4) CTEs use "
+        "`WITH name AS (...)` syntax, (5) QUALIFY is used instead of a subquery WHERE on a "
+        "window function."
+    ),
+    "division_by_zero": (
+        "ERROR TYPE: DIVISION BY ZERO.\n"
+        "Fix: wrap every denominator in NULLIF to avoid this: "
+        "`numerator / NULLIF(denominator, 0)` instead of `numerator / denominator`."
+    ),
+    "generic": (
+        "Carefully re-read the error message and the schema. Fix only the part of the SQL "
+        "that caused the error. Do not restructure the entire query."
+    ),
+}
 
 
 def check_read_only(sql: str) -> None:
@@ -216,62 +287,138 @@ class QueryRunner:
         model_names: list[str] | None,
         row_limit: int,
     ) -> list[ResultRow] | None:
-        """Ask the SQLGenerator for a corrected SQL and retry.
+        """Ask the SQLGenerator for a corrected SQL and retry up to twice.
 
-        Returns ``None`` if the retry also fails or if SQLGenerator is unavailable.
+        Attempt 1: classifies the error type and injects targeted fix instructions
+        so the model knows exactly what kind of mistake to correct.
+
+        Attempt 2: if attempt 1 produces SQL that also fails, sends both error
+        messages and both failed SQL strings for full failure context.
+
+        Returns ``None`` if both retries fail or SQLGenerator is unavailable.
         """
         if self._sql_generator is None:
             return None
 
-        retry_question = (
+        # --- Attempt 1: targeted fix based on error classification ---
+        error_type = _classify_error(error_msg)
+        fix_hint = _RETRY_INSTRUCTIONS[error_type]
+        logger.info("QueryRunner: retry 1 — error classified as '%s'", error_type)
+
+        attempt1_question = (
             f"{question}\n\n"
-            f"[RETRY CONTEXT] The previous SQL failed with this error:\n"
-            f"{error_msg}\n\n"
+            f"[RETRY 1 — FIX REQUIRED]\n"
+            f"{fix_hint}\n\n"
+            f"Databricks error:\n{error_msg}\n\n"
             f"Failed SQL:\n{failed_sql}\n\n"
-            f"Please generate corrected SQL that avoids this error."
+            f"Generate corrected SQL that avoids this specific error. "
+            f"Return ONLY the JSON response — no explanation outside the JSON."
         )
 
+        attempt1_sql = await self._generate_and_validate(
+            system_prompt, attempt1_question, model_names, row_limit, attempt=1
+        )
+        if attempt1_sql is None:
+            return None
+
         try:
-            retry_result = await self._sql_generator.generate(  # type: ignore[union-attr]
+            rows = await self._run_query(attempt1_sql, row_limit)
+            logger.info("QueryRunner: retry 1 succeeded — rows=%d", len(rows))
+            return rows
+        except Exception as exc1:
+            logger.error(
+                "QueryRunner: retry 1 execution failed — %s: %s; sql[:2000]=%r",
+                type(exc1).__name__,
+                str(exc1)[:500],
+                attempt1_sql[:2000],
+            )
+
+            # --- Attempt 2: full failure context from both errors ---
+            error_type2 = _classify_error(str(exc1))
+            fix_hint2 = _RETRY_INSTRUCTIONS[error_type2]
+            logger.info(
+                "QueryRunner: retry 2 — second error classified as '%s'", error_type2
+            )
+
+            attempt2_question = (
+                f"{question}\n\n"
+                f"[RETRY 2 — TWO CONSECUTIVE FAILURES]\n"
+                f"The original SQL and a first correction have both failed. "
+                f"Read both errors carefully and produce a correct query from scratch.\n\n"
+                f"FAILURE 1\n"
+                f"Error: {error_msg}\n"
+                f"SQL:\n{failed_sql}\n\n"
+                f"FAILURE 2\n"
+                f"{fix_hint2}\n"
+                f"Error: {str(exc1)}\n"
+                f"SQL:\n{attempt1_sql}\n\n"
+                f"Generate a completely correct SQL query. "
+                f"Return ONLY the JSON response — no explanation outside the JSON."
+            )
+
+            attempt2_sql = await self._generate_and_validate(
+                system_prompt, attempt2_question, model_names, row_limit, attempt=2
+            )
+            if attempt2_sql is None:
+                return None
+
+            try:
+                rows = await self._run_query(attempt2_sql, row_limit)
+                logger.info("QueryRunner: retry 2 succeeded — rows=%d", len(rows))
+                return rows
+            except Exception as exc2:
+                logger.error(
+                    "QueryRunner: retry 2 execution also failed — %s: %s; sql[:2000]=%r",
+                    type(exc2).__name__,
+                    str(exc2)[:500],
+                    attempt2_sql[:2000],
+                )
+                return None
+
+    async def _generate_and_validate(
+        self,
+        system_prompt: str,
+        question: str,
+        model_names: list[str] | None,
+        row_limit: int,
+        attempt: int,
+    ) -> str | None:
+        """Call SQLGenerator, validate, DDL-guard, and inject limit.
+
+        Returns the ready-to-execute SQL string, or None on any failure.
+        """
+        try:
+            result = await self._sql_generator.generate(  # type: ignore[union-attr]
                 system_prompt=system_prompt,
-                question=retry_question,
+                question=question,
                 model_names=model_names,
             )
         except Exception as exc:
             logger.error(
-                "QueryRunner: SQLGenerator unavailable during retry — %s: %s",
+                "QueryRunner: SQLGenerator unavailable during retry %d — %s: %s",
+                attempt,
                 type(exc).__name__,
                 str(exc),
             )
             return None
 
-        if isinstance(retry_result, GenerationError):
+        if isinstance(result, GenerationError):
             logger.error(
-                "QueryRunner: SQLGenerator returned error on retry — %s",
-                retry_result,
+                "QueryRunner: SQLGenerator returned error on retry %d — %s",
+                attempt,
+                result,
             )
             return None
 
-        # Check the retried SQL for DDL/DML and inject limit
         try:
-            check_read_only(retry_result.sql)
+            check_read_only(result.sql)
         except SecurityError:
-            logger.error("QueryRunner: retry SQL also blocked by DDL/DML guard")
-            return None
-
-        retry_sql = _inject_limit(retry_result.sql, row_limit)
-
-        try:
-            return await self._run_query(retry_sql, row_limit)
-        except Exception as retry_exc:
             logger.error(
-                "QueryRunner: auto-retry execution also failed — %s: %s; "
-                "sql[:2000]=%r",
-                type(retry_exc).__name__,
-                str(retry_exc)[:500],
-                retry_sql[:2000],
+                "QueryRunner: retry %d SQL blocked by DDL/DML guard", attempt
             )
             return None
+
+        return _inject_limit(result.sql, row_limit)
 
     async def _run_query(self, sql: str, row_limit: int) -> list[ResultRow]:
         """Run *sql* via the Databricks SQL connector and return rows.
