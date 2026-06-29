@@ -149,6 +149,11 @@ class PromptBuilder:
         if lineage_block:
             sections.append(lineage_block)
 
+        # --- Join hints block ---
+        join_block = self._join_hints_block(models)
+        if join_block:
+            sections.append(join_block)
+
         # --- Deduplication instructions ---
         dedup_models = [rm for rm in models if _needs_dedup(rm)]
         if dedup_models:
@@ -252,6 +257,63 @@ class PromptBuilder:
         if not has_content:
             return ""
 
+        return "\n".join(lines)
+
+    def _join_hints_block(self, models: list[RankedModel]) -> str:
+        """Return a Join Keys section, or '' if no hints are available.
+
+        Primary source: dbt relationship tests extracted into SchemaIndex.join_hints.
+        Fallback: shared _id/_key columns across exactly two selected models
+        (unambiguous 1:1 join candidates).
+        """
+        selected_names = {rm.model.name for rm in models}
+        name_to_fqn = {rm.model.name: rm.model.fqn for rm in models}
+
+        # Build a name→fqn lookup covering ALL index models (not just selected),
+        # so we can resolve the FQN of a referenced dimension table even when
+        # that table itself is not in the top-N retrieved set.
+        all_name_to_fqn = {m.name: m.fqn for m in self._index.models}
+
+        # --- Primary: explicit relationship tests ---
+        relevant = [
+            h for h in self._index.join_hints
+            if h.from_model in selected_names
+        ]
+        if relevant:
+            lines = ["## Join Keys",
+                     "Use these exact columns when joining — do not guess join keys:"]
+            seen: set[tuple[str, str, str, str]] = set()
+            for h in relevant:
+                key = (h.from_model, h.from_col, h.to_model, h.to_col)
+                if key in seen:
+                    continue
+                seen.add(key)
+                from_fqn = name_to_fqn.get(h.from_model, h.from_model)
+                to_fqn = all_name_to_fqn.get(h.to_model, h.to_model)
+                lines.append(
+                    f"- `{from_fqn}`.{h.from_col} -> `{to_fqn}`.{h.to_col}"
+                )
+            return "\n".join(lines)
+
+        # --- Fallback: shared _id/_key columns between exactly 2 selected models ---
+        col_to_fqns: dict[str, list[str]] = {}
+        for rm in models:
+            for col in rm.model.columns:
+                if col.name.lower().endswith(("_id", "_key")):
+                    col_to_fqns.setdefault(col.name, []).append(rm.model.fqn)
+
+        shared_pairs = {
+            col: fqns for col, fqns in col_to_fqns.items()
+            if len(fqns) == 2
+        }
+        if not shared_pairs:
+            return ""
+
+        lines = ["## Potential Join Columns",
+                 "These _id/_key columns appear in exactly two selected tables "
+                 "and are likely join keys:"]
+        for col, fqns in sorted(shared_pairs.items()):
+            lines.append(f"- `{col}`: {fqns[0]} <-> {fqns[1]}")
         return "\n".join(lines)
 
     def _dedup_block(self, dedup_models: list[RankedModel]) -> str:

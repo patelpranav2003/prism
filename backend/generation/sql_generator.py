@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 _CLAUDE_MODEL = "claude-sonnet-4-6"
 _OPENROUTER_MODEL = "anthropic/claude-sonnet-4-6"  # same model via OpenRouter
-_MAX_TOKENS = 2000
+_MAX_TOKENS = 4096
 _TIMEOUT_SECONDS = 30.0
 
 _USER_FACING_ERROR = (
