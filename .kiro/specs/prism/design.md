@@ -292,7 +292,13 @@ class QueryRunner:
 - Streams rows as they arrive (cursor iteration).
 - Enforces `row_limit` (1–10000); injects `LIMIT {row_limit}` if not already present.
 - DDL/DML guard: checks SQL for prohibited keywords (CREATE, INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, MERGE, REPLACE) before execution; raises `SecurityError` if detected (Requirement 11.5).
-- Auto-retry on warehouse error: calls `SQLGenerator.generate(question, failed_sql, error_msg)` once; if that also fails, surfaces the safe error + failed SQL (Requirement 6.6, 6.7, 6.8).
+- Auto-retry on warehouse error — up to **2 attempts** (Requirement 6.6, 6.7, 6.8):
+  - **`_classify_error(error_msg)`**: inspects the Databricks error string and returns one of 6 error-type keys: `column_not_found`, `table_not_found`, `type_mismatch`, `ambiguous_column`, `syntax_error`, `division_by_zero`, or `generic`.
+  - **`_RETRY_INSTRUCTIONS`**: dict mapping each error type to a targeted fix instruction (e.g. for `ambiguous_column`: "qualify every column reference with its table alias").
+  - **Retry 1**: classifies the first error, injects the matching fix instruction into the retry prompt (`[RETRY 1 — FIX REQUIRED]`), calls `SQLGenerator.generate()`, DDL-guards and limit-injects the result, then executes.
+  - **Retry 2**: if Retry 1 SQL also fails, sends both error messages + both failed SQL strings in a single prompt (`[RETRY 2 — TWO CONSECUTIVE FAILURES]`) with the second error's fix hint, and tries once more.
+  - **`_generate_and_validate()`**: shared helper used by both retry attempts — calls `SQLGenerator`, checks for `GenerationError`, runs the DDL guard, and injects the row limit. Returns the ready-to-execute SQL string or `None`.
+  - If both retries fail or `SQLGenerator` is unavailable, surfaces a safe non-technical error message.
 - Falls back to workspace default warehouse if `DATABRICKS_SQL_WAREHOUSE` is invalid (Requirement 14.4).
 
 ### 12. `api/routes.py` — API Routes

@@ -267,6 +267,37 @@ pytest tests/integration/ tests/smoke/
 
 ---
 
+## Accuracy & SQL Generation Improvements
+
+Recent changes that improve query accuracy — useful context when debugging or extending the generation pipeline.
+
+### Join hints from dbt relationship tests (Task 32)
+
+Prism now extracts all `relationships` test nodes from `manifest.json` at startup and stores them as `SchemaIndex.join_hints`. On every query the `PromptBuilder` injects a `## Join Keys` section listing exact FK→PK column pairs so Claude never guesses join columns.
+
+- **59 hints** extracted from the current manifest (logged at startup as `ManifestParser: extracted 59 join hint(s) from relationship tests`)
+- Fallback: when no relationship tests exist for the selected models, shared `_id`/`_key` columns that appear in exactly two selected models are shown as potential join candidates
+- Code: `backend/discovery/manifest_parser.py` → `parse_join_hints()`, `backend/generation/prompt_builder.py` → `_join_hints_block()`
+
+### max_tokens increased to 4096 (Task 33)
+
+`_MAX_TOKENS` in `backend/generation/sql_generator.py` was raised from 2000 → 4096 to prevent silent JSON truncation on complex multi-join queries.
+
+### Targeted 2-attempt SQL retry (Task 34)
+
+When Databricks returns a SQL error, `QueryRunner._auto_retry()` now does up to two retries instead of one:
+
+| Attempt | Prompt contents |
+|---|---|
+| Retry 1 | Original question + error classified into type (`column_not_found`, `table_not_found`, `type_mismatch`, `ambiguous_column`, `syntax_error`, `division_by_zero`) + targeted fix instruction |
+| Retry 2 | Both error messages + both failed SQL strings + second error's fix hint |
+
+The DDL/DML guard runs on every retry SQL before it reaches the warehouse — no write operations are possible under any circumstances.
+
+Code: `backend/execution/databricks_runner.py` → `_classify_error()`, `_RETRY_INSTRUCTIONS`, `_auto_retry()`, `_generate_and_validate()`
+
+---
+
 ## If an External PR Comes In on the Public Repo
 
 Someone opened a PR on `prism` (public) and you merged it. Bring it into private:

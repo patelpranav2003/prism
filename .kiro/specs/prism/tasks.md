@@ -394,6 +394,15 @@ Implement Prism as a Databricks App with a Python/FastAPI backend and a React/Ty
   - 4096 tokens is the safe ceiling for `claude-sonnet-4-6` on this use case; well within model limits.
   - _Requirements: 5.4_
 
+- [x] 34. Targeted 2-attempt SQL retry with error classification
+  - Root problem: the single generic retry prompt ("fix this SQL") rarely succeeded for specific error types like column-not-found or type-mismatch because Claude had no guidance on what kind of fix was needed.
+  - Solution: classify the Databricks error, inject a targeted fix instruction, and add a second retry with full failure context if the first correction also fails.
+  - [x] 34.1 Add `_classify_error(error_msg)` to `backend/execution/databricks_runner.py`: maps Databricks error strings to 6 typed keys (`column_not_found`, `table_not_found`, `type_mismatch`, `ambiguous_column`, `syntax_error`, `division_by_zero`, `generic`).
+  - [x] 34.2 Add `_RETRY_INSTRUCTIONS` dict: one targeted fix instruction per error type (e.g. ambiguous column → "qualify every column reference with its table alias in SELECT, WHERE, JOIN ON, GROUP BY, ORDER BY").
+  - [x] 34.3 Add `_generate_and_validate()` helper: shared by both retry attempts — calls `SQLGenerator.generate()`, checks for `GenerationError`, runs DDL guard, injects row limit. Returns ready-to-execute SQL or `None`.
+  - [x] 34.4 Rewrite `_auto_retry()`: **Retry 1** uses `_classify_error` + targeted hint in prompt; **Retry 2** (if retry 1 SQL also fails) sends both error messages + both failed SQL strings with the second error's fix hint.
+  - _Requirements: 6.6, 6.7, 6.8_
+
 - [ ] 27. Email-based admin authentication (future)
   - Replace bcrypt `ADMIN_PASSWORD_HASH` gate in `POST /api/auth` with `X-Forwarded-Email` header validation
   - Add `ADMIN_ALLOWED_EMAILS` env var (comma-separated) to `AppConfig`; set in Databricks App UI
