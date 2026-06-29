@@ -36,6 +36,14 @@ export interface SQLResultData {
   confidence_reason: string
 }
 
+export type ChartType = 'bar' | 'line' | 'area' | 'pie' | 'scatter' | 'none'
+
+export interface ChartSuggestion {
+  type: ChartType
+  x_column: string | null
+  y_columns: string[]
+}
+
 export interface QueryResponse {
   sql_result: SQLResultData
   rows: Record<string, unknown>[]
@@ -43,6 +51,7 @@ export interface QueryResponse {
   execution_time_ms: number
   warehouse_name: string
   correlation_id: string
+  chart: ChartSuggestion
 }
 
 export interface AppIdentityData {

@@ -349,3 +349,30 @@ body {
 .save-identity-btn:hover:not(:disabled) { opacity: 0.9; box-shadow: 0 4px 14px rgba(99,102,241,0.4); }
 .save-identity-btn:disabled { background: #c7d2fe; box-shadow: none; cursor: not-allowed; }
 @media (max-width: 600px) { .identity-grid { grid-template-columns: 1fr; } }
+
+/* ---------- Chart / View Toggle ---------- */
+.results-section { margin-bottom: 8px; }
+
+.view-toggle {
+  display: inline-flex; border: 1px solid #e5e7eb; border-radius: 8px;
+  overflow: hidden; margin-bottom: 10px;
+}
+.toggle-btn {
+  padding: 5px 16px; background: white; border: none; cursor: pointer;
+  font-size: 0.82rem; font-weight: 500; color: #6b7280;
+  transition: background 0.12s, color 0.12s;
+}
+.toggle-btn:hover:not(.active) { background: #f3f4f6; color: #374151; }
+.toggle-btn.active {
+  background: linear-gradient(135deg, #6366f1, #1d4ed8);
+  color: white; font-weight: 600;
+}
+
+.embedded-chart {
+  margin-bottom: 8px;
+  padding: 8px 0 0;
+}
+
+.table-truncation-note {
+  margin-top: 6px; font-size: 0.8rem; color: #9ca3af; text-align: right;
+}

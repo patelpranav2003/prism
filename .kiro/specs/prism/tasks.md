@@ -403,6 +403,19 @@ Implement Prism as a Databricks App with a Python/FastAPI backend and a React/Ty
   - [x] 34.4 Rewrite `_auto_retry()`: **Retry 1** uses `_classify_error` + targeted hint in prompt; **Retry 2** (if retry 1 SQL also fails) sends both error messages + both failed SQL strings with the second error's fix hint.
   - _Requirements: 6.6, 6.7, 6.8_
 
+- [x] 35. Automatic chart visualization
+  - Root problem: query results were displayed only as a flat table; users had no quick visual of trends, distributions, or comparisons.
+  - Solution: heuristic chart-type detection from column names and data, a Recharts renderer, a Chart/Table toggle, a 100-row table display cap with full CSV export, and a raised row limit of 10,000.
+  - [x] 35.1 Add `ChartSuggestion` Pydantic model to `backend/api/models.py` (fields: `type` literal `bar|line|area|pie|scatter|none`, `x_column`, `y_columns`); add `chart: ChartSuggestion` field to `QueryResponse` with `default_factory` returning `type="none"`.
+  - [x] 35.2 Create `backend/generation/chart_advisor.py` — `suggest_chart(rows, question) -> ChartSuggestion`: detects date columns (name pattern), numeric columns (value type inspection > 80% numeric), categorical columns (non-numeric, non-date, ≤ 30 distinct values); rules: date + no-cat → line; distribution keywords + ≤ 15 rows → pie; cat + numeric → bar; 2 numerics only → scatter; 3-D data (date + cat + numeric) → none to avoid flat-line mess; logs detected type at INFO level; never raises.
+  - [x] 35.3 In `backend/api/routes.py`: import `suggest_chart`; call `suggest_chart(rows, body.question)` after SQL execution; pass `chart=chart` to `QueryResponse`.
+  - [x] 35.4 Raise default `row_limit` from 1000 → 10000 in `QueryRequest` (backend) and `submitQuery()` default (frontend `api.ts`).
+  - [x] 35.5 Add `recharts` to `frontend/package.json`; create `frontend/src/components/ChartView.tsx`: renders bar, line, area, pie, scatter charts via Recharts `ResponsiveContainer`; scrollable wrapper activates beyond 10 data points (min 60 px/point); labels rotate −40° beyond 6 points; Y-axis ticks formatted as K/M; date ticks formatted as `Jan 2026`; Prism indigo color palette.
+  - [x] 35.6 Update `frontend/src/components/AssistantMessage.tsx`: add Chart/Table toggle (defaults to chart when one is detected); `ChartView` receives full `result.rows`; table always receives full rows.
+  - [x] 35.7 Update `frontend/src/components/ResultsTable.tsx`: display cap `TABLE_PREVIEW_LIMIT = 100` rows in the table; CSV download exports all rows; show "Showing 100 of N rows — Download CSV for full result set" when truncated.
+  - [x] 35.8 Add `ChartSuggestion` interface and updated `QueryResponse` to `frontend/src/types.ts`; add chart/toggle CSS to `frontend/src/index.css`.
+  - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
+
 - [ ] 27. Email-based admin authentication (future)
   - Replace bcrypt `ADMIN_PASSWORD_HASH` gate in `POST /api/auth` with `X-Forwarded-Email` header validation
   - Add `ADMIN_ALLOWED_EMAILS` env var (comma-separated) to `AppConfig`; set in Databricks App UI

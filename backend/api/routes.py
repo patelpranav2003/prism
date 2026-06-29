@@ -31,6 +31,7 @@ from backend.api.models import (
     AppIdentityResponse,
     AuthRequest,
     AuthResponse,
+    ChartSuggestion,
     ColumnMetaSummary,
     QueryRequest,
     QueryResponse,
@@ -40,6 +41,7 @@ from backend.api.models import (
     SQLResult as PydanticSQLResult,
     StatusResponse,
 )
+from backend.generation.chart_advisor import suggest_chart
 from backend.exceptions import GenerationError, SecurityError
 from backend.logging_config import correlation_id_var
 
@@ -296,6 +298,8 @@ async def query(
             )
         execution_time_ms = int(time.monotonic() * 1000) - start_ms
 
+    chart = suggest_chart(rows, body.question) if rows else ChartSuggestion(type="none")
+
     return QueryResponse(
         sql_result=PydanticSQLResult(
             sql=sql_result.sql,
@@ -309,6 +313,7 @@ async def query(
         execution_time_ms=execution_time_ms,
         warehouse_name=config.databricks_sql_warehouse,
         correlation_id=cid,
+        chart=chart,
     )
 
 

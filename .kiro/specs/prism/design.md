@@ -278,6 +278,29 @@ class SQLGenerator:
 - Logs: question[:500], selected model names, Claude model ID, token count, outcome.
 - Post-generation column validation: extracts column references from SQL (after stripping string literals and SQL keywords/functions from consideration), cross-checks against SchemaIndex; skips tokens matching known catalog names, schema names, table names, or defined CTE/column aliases; unrecognised columns → WARN log + sets `confidence="low"` (Requirement 15.4, 15.5).
 
+### 11b. `generation/chart_advisor.py` — Chart_Advisor
+
+Heuristic chart-type detection — no LLM call required.
+
+```python
+def suggest_chart(rows: list[dict], question: str) -> ChartSuggestion:
+    """Return the best chart type for these rows and question. Never raises."""
+```
+
+**Column classification** (applied to `rows[0].keys()`):
+- **Date columns**: name contains any of `date`, `day`, `week`, `month`, `year`, `period`, `quarter`, `created_at`, `updated_at`, `timestamp`, `dt`, `ymd`.
+- **Numeric columns**: > 80% of non-null values can be parsed as `float`.
+- **Categorical columns**: not numeric, not date, and has > 1 and ≤ 30 distinct string values.
+
+**Decision rules** (evaluated in order):
+1. `date_cols` present **and** `num_cols` present **and no `cat_cols`** → `line` (x = first date col, y = numeric cols, up to 3). The `not cat_cols` guard prevents 3-D pivot data (brand × month × impressions) from being plotted as one flat jagged line.
+2. `cat_cols` present **and** exactly 1 numeric **and** question contains distribution keyword (`share`, `breakdown`, `distribution`, `proportion`, `percent`, `percentage`, `split`, `composition`, `mix`, `portion`) **and** ≤ 15 rows → `pie`.
+3. `cat_cols` present **and** `num_cols` present → `bar` (x = first cat col, y = numeric cols, up to 3).
+4. Exactly 2 numeric cols, no cat, no date → `scatter`.
+5. Otherwise → `none`.
+
+Returns `ChartSuggestion(type="none")` on any exception (never raises). Logs detected chart type at INFO level.
+
 ### 11. `execution/databricks_runner.py` — Query_Runner
 
 Executes SQL against the Databricks SQL warehouse.
@@ -323,9 +346,14 @@ All endpoints include correlation ID injection via FastAPI middleware. Error res
 Key request/response contracts:
 
 ```python
+class ChartSuggestion(BaseModel):
+    type: Literal["bar", "line", "area", "pie", "scatter", "none"]
+    x_column: str | None = None
+    y_columns: list[str] = Field(default_factory=list)
+
 class QueryRequest(BaseModel):
     question: str
-    row_limit: int = Field(default=1000, ge=1, le=10000)
+    row_limit: int = Field(default=10000, ge=1, le=10000)
     correlation_id: str | None = None
 
 class SQLResult(BaseModel):
@@ -342,6 +370,7 @@ class QueryResponse(BaseModel):
     execution_time_ms: int
     warehouse_name: str
     correlation_id: str
+    chart: ChartSuggestion = Field(default_factory=lambda: ChartSuggestion(type="none"))
 
 class StatusResponse(BaseModel):
     cache_status: Literal["fresh", "stale", "unavailable"]
@@ -396,7 +425,9 @@ All React components live under `frontend/src/`.
 | Component | Role |
 |---|---|
 | `SearchBar` | Main question input + submit; dynamic example question chips generated from gold models (grouped by domain prefix, shuffled per page load, fixed per session) |
-| `ResultsTable` | Sortable table; Download CSV; streaming row display |
+| `ResultsTable` | Sortable table; Download CSV; streaming row display; displays up to 100 rows (`TABLE_PREVIEW_LIMIT`); shows "Showing 100 of N rows" banner and "Download all N rows" CSV link when truncated; CSV export always uses all returned rows |
+| `ChartView` | Renders bar, line, area, pie, or scatter chart via Recharts `ResponsiveContainer`; scrollable wrapper (`overflow-x: auto`) activates beyond 10 data points at 60 px/point; X-axis labels rotate −40° beyond 6 points; Y-axis ticks formatted as K/M; ISO date ticks formatted as "Jan 2026" or "Jun 15"; Prism indigo colour palette |
+| `AssistantMessage` | Renders one assistant turn; includes Chart/Table toggle (defaults to Chart when a chart is detected, Table otherwise); passes full `rows` to both `ChartView` and `ResultsTable` |
 | `SQLViewer` | Syntax-highlighted SQL; copy-to-clipboard |
 | `ExplanationPanel` | Collapsible "How I answered this"; models_used tags |
 | `SchemaExplorer` | Sidebar; Gold/Silver/Bronze sections; search; detail panel; horizontally resizable sidebar (220–640 px) and detail panel (300–860 px); model list scrolls internally with pinned header/search/footer |

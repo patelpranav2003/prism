@@ -11,6 +11,7 @@ Prism uses several techniques to ensure correct SQL — especially for multi-tab
 - **4096-token output budget** — The LLM response cap is set to 4096 tokens to prevent silent JSON truncation on complex multi-join queries with verbose explanations.
 - **Targeted 2-attempt SQL retry** — When Databricks returns an error, Prism classifies it (column not found, type mismatch, ambiguous column, syntax error, etc.) and sends a targeted fix instruction to Claude for Retry 1. If Retry 1 also fails, Retry 2 includes both error messages and both failed SQL strings so Claude has the full failure context. Raw error stack traces are never shown to users.
 - **Full compiled SQL in context** — The full compiled SQL for each model is stored and shown to Claude (first 1500 chars in the prompt), giving it accurate grain, filter, and join pattern hints.
+- **Automatic chart visualization** — After execution, a heuristic `chart_advisor` (no extra LLM call) inspects column names and value types to pick the best chart type: line for time-series, bar for categorical breakdowns, pie for small distributions, scatter for two-numeric correlations. Results are shown in a Chart/Table toggle view; bar and line charts scroll horizontally when there are many data points. The table view caps display at 100 rows while CSV export delivers all returned rows (up to 10,000).
 
 ---
 

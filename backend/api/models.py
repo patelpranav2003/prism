@@ -3,6 +3,12 @@ from datetime import datetime
 from typing import Literal, Optional
 
 
+class ChartSuggestion(BaseModel):
+    type: Literal["bar", "line", "area", "pie", "scatter", "none"]
+    x_column: Optional[str] = None
+    y_columns: list[str] = Field(default_factory=list)
+
+
 class ConversationMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
@@ -10,7 +16,7 @@ class ConversationMessage(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str
-    row_limit: int = Field(default=1000, ge=1, le=10000)
+    row_limit: int = Field(default=10000, ge=1, le=10000)
     history: list[ConversationMessage] = Field(default_factory=list)
     correlation_id: Optional[str] = None
 
@@ -30,6 +36,7 @@ class QueryResponse(BaseModel):
     execution_time_ms: int
     warehouse_name: str
     correlation_id: str
+    chart: ChartSuggestion = Field(default_factory=lambda: ChartSuggestion(type="none"))
 
 
 class StatusResponse(BaseModel):

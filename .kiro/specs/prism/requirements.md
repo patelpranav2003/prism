@@ -281,3 +281,25 @@ Prism is a natural language analytics assistant deployed as a Databricks App. It
 4. THE `AppConfig.from_env()` factory SHALL invoke `python-dotenv`'s `load_dotenv()` as its first action before reading any environment variable, so that a `.env` file in the project root is automatically loaded when running locally. This call SHALL be a silent no-op when no `.env` file is present (Databricks Apps production environment), with no error or warning logged.
 
 5. A company deploying Prism to their Databricks workspace SHALL NOT be required to fork or copy the Prism source code into a private repository. Instead, they SHALL be able to point the Databricks App UI directly at the public GitHub repository URL. The only configuration required SHALL be: (1) create a Databricks secret scope named exactly `prism-secrets` in their workspace, (2) add required secrets to that scope (`gitlab-token`, at least one of `anthropic-api-key` or `openrouter-api-key`, and `admin-password-hash`), (3) set non-secret environment variables in the Databricks App UI, and (4) click Deploy.
+
+---
+
+### Requirement 17: Chart Visualization
+
+**User Story:** As a business user, I want query results to be automatically displayed as an appropriate chart whenever the data shape supports it, so that I can understand trends and distributions at a glance without having to export to Excel.
+
+#### Acceptance Criteria
+
+1. THE backend SHALL include a `backend/generation/chart_advisor.py` module that exports a `suggest_chart(rows, question)` function returning a `ChartSuggestion` Pydantic model (`type`, `x_column`, `y_columns`). The function SHALL apply heuristic rules to classify result columns as date, numeric, or categorical — no additional LLM call SHALL be made.
+
+2. THE `suggest_chart()` function SHALL apply chart-type selection rules in this priority order: (a) date column + numeric columns + no categorical columns → `line`; (b) categorical column + exactly one numeric column + distribution keyword in question + ≤ 15 rows → `pie`; (c) categorical column + numeric columns → `bar`; (d) exactly two numeric columns + no categorical + no date → `scatter`; (e) all other shapes → `none`. The function SHALL return `ChartSuggestion(type="none")` without raising on any exception.
+
+3. THE `QueryResponse` Pydantic model SHALL include a `chart: ChartSuggestion` field with a default value of `ChartSuggestion(type="none")`, and the default `row_limit` in `QueryRequest` SHALL be 10,000.
+
+4. THE frontend SHALL render an interactive chart using `recharts` when `chart.type` is not `"none"` and the result has more than one row. Bar, line, area, pie, and scatter chart types SHALL all be supported.
+
+5. WHEN the number of data points exceeds 10, THE chart container SHALL enable horizontal scrolling with a minimum width of 60 px per data point. WHEN the number of data points exceeds 6, X-axis tick labels SHALL be rotated −40° to prevent overlap.
+
+6. THE frontend SHALL display a Chart / Table toggle above the results panel when a chart is detected. THE default active tab SHALL be Chart when a chart is present; Table otherwise.
+
+7. THE `ResultsTable` component SHALL display at most 100 rows at a time. WHEN the result set exceeds 100 rows, a banner SHALL show "Showing 100 of N rows" and a CSV download link SHALL read "Download all N rows". THE CSV export SHALL always include all rows returned by the backend, regardless of the display cap.

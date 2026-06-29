@@ -26,7 +26,7 @@ export async function fetchStatus(): Promise<StatusResponse> {
 export async function submitQuery(
   question: string,
   history: ConversationMessage[] = [],
-  rowLimit = 1000,
+  rowLimit = 10000,
 ): Promise<QueryResponse> {
   return _json(
     await fetch(`${BASE}/query`, {

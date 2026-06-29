@@ -296,6 +296,38 @@ The DDL/DML guard runs on every retry SQL before it reaches the warehouse — no
 
 Code: `backend/execution/databricks_runner.py` → `_classify_error()`, `_RETRY_INSTRUCTIONS`, `_auto_retry()`, `_generate_and_validate()`
 
+### Automatic chart visualization (Task 35)
+
+Query results now include an automatically-selected chart when the data shape supports it. No extra LLM call is made — a heuristic `chart_advisor` inspects column names and value types immediately after SQL execution.
+
+**Chart type rules (priority order):**
+
+| Condition | Chart |
+|---|---|
+| Date column + numeric columns + no categorical column | Line |
+| Categorical + 1 numeric + distribution keyword in question + ≤ 15 rows | Pie |
+| Categorical + numeric columns | Bar |
+| Exactly 2 numeric, no categorical, no date | Scatter |
+| Anything else | None (table only) |
+
+The `not cat_cols` guard on the line rule is critical — without it, a query like "impressions by brand per month" (date × brand × impressions) would plot all rows as one flat jagged line instead of returning `none` and falling back to the table.
+
+**Frontend behaviour:**
+- Chart/Table toggle appears above results when a chart is detected; defaults to Chart tab.
+- Bar and line charts scroll horizontally beyond 10 data points (min 60 px/point).
+- X-axis labels rotate −40° beyond 6 points to prevent overlap.
+- ISO date ticks formatted as "Jan 2026" (monthly) or "Jun 15" (daily).
+- Table display capped at 100 rows; CSV export delivers all returned rows.
+- Default `row_limit` raised from 1,000 → 10,000.
+
+**Code:**
+- `backend/generation/chart_advisor.py` — `suggest_chart(rows, question) -> ChartSuggestion`
+- `backend/api/models.py` — `ChartSuggestion` model; `chart` field on `QueryResponse`; `row_limit` default = 10000
+- `backend/api/routes.py` — calls `suggest_chart()` after execution, passes result to `QueryResponse`
+- `frontend/src/components/ChartView.tsx` — Recharts renderer (bar/line/area/pie/scatter)
+- `frontend/src/components/AssistantMessage.tsx` — Chart/Table toggle
+- `frontend/src/components/ResultsTable.tsx` — 100-row display cap, full CSV export
+
 ---
 
 ## If an External PR Comes In on the Public Repo

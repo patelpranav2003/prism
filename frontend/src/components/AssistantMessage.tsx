@@ -3,6 +3,7 @@ import type { QueryResponse } from '../types'
 import ConfidenceIndicator from './ConfidenceIndicator'
 import ResultsTable from './ResultsTable'
 import SQLViewer from './SQLViewer'
+import ChartView from './ChartView'
 
 interface Props {
   result: QueryResponse
@@ -10,9 +11,12 @@ interface Props {
 }
 
 export default function AssistantMessage({ result, onModelClick }: Props) {
-  const [showSql, setShowSql] = useState(false)
-  const { sql_result, rows, row_count, execution_time_ms } = result
+  const { sql_result, rows, row_count, execution_time_ms, chart } = result
   const hasSql = sql_result.sql.trim().length > 0
+  const hasChart = chart && chart.type !== 'none' && rows.length > 1
+
+  const [showSql, setShowSql] = useState(false)
+  const [view, setView] = useState<'chart' | 'table'>(hasChart ? 'chart' : 'table')
 
   return (
     <div className="assistant-card">
@@ -30,13 +34,42 @@ export default function AssistantMessage({ result, onModelClick }: Props) {
       <p className="answer-text">{sql_result.explanation}</p>
 
       {hasSql && rows.length > 0 && (
-        <div className="embedded-table">
-          <ResultsTable
-            rows={rows}
-            rowCount={row_count}
-            executionTimeMs={execution_time_ms}
-            warehouseName=""
-          />
+        <div className="results-section">
+          {hasChart && (
+            <div className="view-toggle" role="group" aria-label="Switch between chart and table">
+              <button
+                type="button"
+                className={`toggle-btn ${view === 'chart' ? 'active' : ''}`}
+                onClick={() => setView('chart')}
+              >
+                Chart
+              </button>
+              <button
+                type="button"
+                className={`toggle-btn ${view === 'table' ? 'active' : ''}`}
+                onClick={() => setView('table')}
+              >
+                Table
+              </button>
+            </div>
+          )}
+
+          {hasChart && view === 'chart' && (
+            <div className="embedded-chart">
+              <ChartView chart={chart} rows={rows} />
+            </div>
+          )}
+
+          {(!hasChart || view === 'table') && (
+            <div className="embedded-table">
+              <ResultsTable
+                rows={rows}
+                rowCount={row_count}
+                executionTimeMs={execution_time_ms}
+                warehouseName=""
+              />
+            </div>
+          )}
         </div>
       )}
 
